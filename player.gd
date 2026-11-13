@@ -108,6 +108,10 @@ func _ready() -> void:
 	if interact_ray:
 		interact_ray.add_exception(self)
 
+	# Прилипание к поверхности при спуске по ступенькам и небольшим уклонам
+	floor_snap_length = 0.35
+	floor_max_angle = deg_to_rad(50.0)
+
 	jump_velocity = sqrt(max(2.0 * gravity * jump_height, 0.001))
 
 	if footstep_audio and not footstep_audio.stream:
@@ -246,11 +250,16 @@ func _apply_crouch_transition(delta: float) -> void:
 	var target_head_y: float = crouching_head_y if current_stance == Stance.CROUCHING else standing_head_y
 
 	if capsule:
-		capsule.height = move_toward(capsule.height, target_h, crouch_transition_speed * delta)
+		# Экспоненциальное сглаживание: быстрый старт, мягкое замедление в конце
+		var k := 1.0 - exp(-crouch_transition_speed * 0.5 * delta)
+		capsule.height = lerpf(capsule.height, target_h, k)
+		if absf(capsule.height - target_h) < 0.002:
+			capsule.height = target_h
 		if collision_shape:
 			collision_shape.position.y = capsule.height * 0.5
 
-	head.position.y = move_toward(head.position.y, target_head_y, crouch_transition_speed * delta)
+	var kh := 1.0 - exp(-crouch_transition_speed * 0.5 * delta)
+	head.position.y = lerpf(head.position.y, target_head_y, kh)
 
 func has_interact_target() -> bool:
 	if interact_ray == null or not interact_ray.is_colliding():
