@@ -69,10 +69,21 @@ var stamina: float = 100.0
 var stamina_regen_timer: float = 0.0
 var exhausted: bool = false
 var land_offset: float = 0.0
+var land_vel: float = 0.0
+var land_pitch: float = 0.0
+var bob_y: float = 0.0
 var fall_speed: float = 0.0
+var sprint_blend: float = 0.0
+var current_speed_limit: float = 4.5
 @export_group("Ощущение камеры")
 @export var tilt_max_deg: float = 1.5
-@export var land_dip_amount: float = 0.08
+@export var land_dip_amount: float = 0.12
+@export var land_pitch_deg: float = 2.5
+@export var land_spring: float = 400.0
+@export var land_damping: float = 22.0
+@export var sprint_lean_deg: float = 1.5
+@export var sprint_blend_speed: float = 3.0
+@export var speed_ramp: float = 8.0
 var footstep_timer: float = 0.0
 
 func _ready() -> void:
@@ -208,8 +219,14 @@ func _handle_movement(delta: float) -> void:
 		Stance.STANDING:
 			target_speed = walk_speed
 
-	var target_vel_x := move_dir.x * target_speed
-	var target_vel_z := move_dir.z * target_speed
+	# Плавный переход между скоростями (ходьба / бег / присед)
+	var ramp := speed_ramp if target_speed > current_speed_limit else speed_ramp * 1.5
+	current_speed_limit = move_toward(current_speed_limit, target_speed, ramp * delta)
+	# Степень «бега» 0..1 для камеры
+	sprint_blend = move_toward(sprint_blend, 1.0 if current_stance == Stance.SPRINTING else 0.0, sprint_blend_speed * delta)
+
+	var target_vel_x := move_dir.x * current_speed_limit
+	var target_vel_z := move_dir.z * current_speed_limit
 	var accel := ground_accel if is_on_floor() else air_accel
 	var friction := ground_friction if is_on_floor() else air_friction
 
@@ -259,17 +276,22 @@ func _apply_head_bob(delta: float) -> void:
 	if is_on_floor() and horizontal_speed > 0.5:
 		var speed_factor := horizontal_speed / walk_speed
 		bob_phase += delta * bob_freq * speed_factor
-		var bob_offset_y := sin(bob_phase) * bob_amp
-		var bob_offset_x := cos(bob_phase * 0.5) * (bob_amp * 0.6)
-		bob_node.position.y = lerpf(bob_node.position.y, bob_offset_y + land_offset, delta * 12.0)
+		var amp := bob_amp * lerpf(1.0, 1.7, sprint_blend)
+		var bob_offset_y := sin(bob_phase) * amp
+		var bob_offset_x := cos(bob_phase * 0.5) * (amp * 0.6)
+		bob_y = lerpf(bob_y, bob_offset_y, delta * 12.0)
 		bob_node.position.x = lerpf(bob_node.position.x, bob_offset_x, delta * 12.0)
 	else:
 		bob_phase = 0.0
-		bob_node.position = bob_node.position.lerp(Vector3(0.0, land_offset, 0.0), delta * 10.0)
+		bob_y = lerpf(bob_y, 0.0, delta * 10.0)
+		bob_node.position.x = lerpf(bob_node.position.x, 0.0, delta * 10.0)
+	bob_node.position.y = bob_y + land_offset
 
 func _apply_camera_feel(delta: float) -> void:
-	# Затухание «просадки» камеры после приземления
-	land_offset = lerpf(land_offset, 0.0, delta * 8.0)
+	# Пружина приземления: резкий толчок вниз с затухающим отскоком
+	land_vel += (-land_spring * land_offset - land_damping * land_vel) * delta
+	land_offset += land_vel * delta
+	land_pitch = lerpf(land_pitch, 0.0, delta * 7.0)
 
 	# Наклон камеры при движении вбок (strafe tilt)
 	var local_vel := global_transform.basis.inverse() * velocity
@@ -277,17 +299,16 @@ func _apply_camera_feel(delta: float) -> void:
 	camera.rotation.z = lerpf(camera.rotation.z, target_roll, delta * 8.0)
 
 	# Лёгкий наклон головы вверх при прыжке/падении
-	var target_pitch := clampf(velocity.y * 0.004, -0.04, 0.04)
-	camera.rotation.x = lerpf(camera.rotation.x, target_pitch, delta * 6.0)
+	# + наклон вперёд при беге + толчок при приземлении
+	var target_pitch := clampf(velocity.y * 0.004, -0.04, 0.04) - sprint_blend * deg_to_rad(sprint_lean_deg) + land_pitch
+	camera.rotation.x = lerpf(camera.rotation.x, target_pitch, delta * 10.0)
 
 func _apply_fov_change(delta: float) -> void:
 	if not fov_change:
 		return
 
-	var target_fov: float = default_fov
-	if current_stance == Stance.SPRINTING and is_on_floor() and velocity.length() > walk_speed:
-		target_fov = default_fov + sprint_fov_boost
-
+	# FOV следует за плавным sprint_blend, а не за переключением состояния
+	var target_fov: float = default_fov + sprint_fov_boost * smoothstep(0.0, 1.0, sprint_blend)
 	camera.fov = lerpf(camera.fov, target_fov, delta * fov_transition_speed)
 
 func _handle_footsteps(delta: float) -> void:
@@ -334,8 +355,10 @@ func _play_footstep() -> void:
 func _check_landing() -> void:
 	if not was_on_floor and is_on_floor():
 		landed.emit()
-		var impact := clampf(-fall_speed / jump_velocity, 0.0, 2.0)
-		land_offset = -impact * land_dip_amount
+		var impact := clampf(-fall_speed / jump_velocity, 0.0, 2.5)
+		if impact > 0.15:
+			land_vel = -impact * land_dip_amount * 12.0
+			land_pitch = impact * deg_to_rad(land_pitch_deg)
 		if footstep_audio:
 			footstep_audio.pitch_scale = randf_range(0.75, 0.9)
 			footstep_audio.volume_db = -9.0 + impact * 6.0
