@@ -44,11 +44,13 @@ enum Stance { STANDING, CROUCHING, SPRINTING }
 # Ссылки на узлы
 @onready var collision_shape: CollisionShape3D = $CollisionShape3D
 @onready var head: Node3D = $Head
-@onready var camera: Camera3D = $Head/Camera3D
+@onready var camera: Camera3D = $Head/CameraBoom/Camera3D
+@onready var interact_ray: RayCast3D = $Head/CameraBoom/Camera3D/InteractRay
+@onready var camera_boom: Node3D = $Head/CameraBoom
 @onready var ceiling_check: ShapeCast3D = $CeilingCheck
 
 var current_stance: Stance = Stance.STANDING
-var gravity: float = 9.8
+var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)
 var jump_velocity: float = 0.0
 
 var coyote_timer: float = 0.0
@@ -59,36 +61,35 @@ var capsule: CapsuleShape3D
 
 func _ready() -> void:
 	_setup_input_actions()
-
-	# Получение гравитации из настроек проекта с безопасным значением по умолчанию
-	gravity = ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)
-
-	# Делаем копию формы, чтобы изменение высоты не затрагивало другие экземпляры
+	
+	# Копируем форму, чтобы изменения высоты не сломали другие экземпляры
 	if collision_shape and collision_shape.shape:
 		collision_shape.shape = collision_shape.shape.duplicate()
 		capsule = collision_shape.shape as CapsuleShape3D
 
-	# Исключаем персонажа из проверки потолка
+	# Камера зафиксирована на краю кабины и не пересекает стены; используем длину стебля ниже
+	if camera_boom:
+		if camera_boom has_method("length"):
+			camera_boom.length = 0.6
+		# включение столкновений камеры реализуется самим SpringArm, если поддерживает
+
+	# Исключаем потолок
 	if ceiling_check:
 		ceiling_check.add_exception(self)
 
-	# Расчет скорости прыжка по высоте: v = sqrt(2 * g * h)
-	jump_velocity = sqrt(2.0 * gravity * jump_height)
+	# Скорость прыжка
+	jump_velocity = sqrt(max(2.0 * gravity * jump_height, 0.001))
 
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func _unhandled_input(event: InputEvent) -> void:
-	# Переключение курсора по Esc
+	# Esc - вернуть/вернуть захват курсора
 	if event.is_action_pressed("ui_cancel") or (event is InputEventKey and event.pressed and event.physical_keycode == KEY_ESCAPE):
 		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		else:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-
-	# Захват мыши по клику внутри окна
-	if event is InputEventMouseButton and event.pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
-		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-
+	
 	# Вращение камеры
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		rotate_y(-event.relative.x * mouse_sensitivity)
@@ -104,7 +105,7 @@ func _physics_process(delta: float) -> void:
 	_apply_crouch_transition(delta)
 	_apply_head_bob(delta)
 	_apply_fov_change(delta)
-
+	_process_interaction()
 	move_and_slide()
 	_check_landing()
 
@@ -113,7 +114,7 @@ func _update_timers(delta: float) -> void:
 		coyote_timer = coyote_time
 	else:
 		coyote_timer = maxf(coyote_timer - delta, 0.0)
-
+	
 	if Input.is_action_just_pressed("jump"):
 		jump_buffer_timer = jump_buffer_time
 	else:
@@ -125,26 +126,22 @@ func _handle_gravity(delta: float) -> void:
 
 func _handle_stance() -> void:
 	var wants_crouch: bool = Input.is_action_pressed("crouch")
-	var has_ceiling: bool = ceiling_check.is_colliding() if ceiling_check else false
+	var has_ceiling: bool = ceiling_check and ceiling_check.is_colliding()
 	var wants_sprint: bool = Input.is_action_pressed("sprint")
 	var is_moving: bool = Input.get_vector("move_left", "move_right", "move_forward", "move_back").length_squared() > 0.01
 
 	var next_stance: Stance = Stance.STANDING
-
-	# Если игрок жмет присед или над головой препятствие — стоим/идем в приседе
 	if wants_crouch or has_ceiling:
 		next_stance = Stance.CROUCHING
 	elif wants_sprint and is_moving and is_on_floor():
 		next_stance = Stance.SPRINTING
 	else:
 		next_stance = Stance.STANDING
-
 	if next_stance != current_stance:
 		current_stance = next_stance
-		stance_changed.emit(current_stance)
+		emit_signal("stance_changed", current_stance)
 
 func _handle_jump() -> void:
-	# Прыжок доступен, если есть буфер, койот-тайм и мы не зажаты низким потолком
 	if jump_buffer_timer > 0.0 and coyote_timer > 0.0 and current_stance != Stance.CROUCHING:
 		velocity.y = jump_velocity
 		jump_buffer_timer = 0.0
@@ -152,9 +149,7 @@ func _handle_jump() -> void:
 
 func _handle_movement(delta: float) -> void:
 	var input_2d := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
-	# Направление ввода относительно ориентации тела игрока
 	var move_dir := (transform.basis * Vector3(input_2d.x, 0.0, input_2d.y)).normalized()
-
 	var target_speed: float = walk_speed
 	match current_stance:
 		Stance.CROUCHING:
@@ -163,14 +158,10 @@ func _handle_movement(delta: float) -> void:
 			target_speed = sprint_speed
 		Stance.STANDING:
 			target_speed = walk_speed
-
 	var target_vel_x := move_dir.x * target_speed
 	var target_vel_z := move_dir.z * target_speed
-
 	var accel := ground_accel if is_on_floor() else air_accel
 	var friction := ground_friction if is_on_floor() else air_friction
-
-	# Плавный разгон или торможение
 	if move_dir.length_squared() > 0.001:
 		velocity.x = move_toward(velocity.x, target_vel_x, accel * delta)
 		velocity.z = move_toward(velocity.z, target_vel_z, accel * delta)
@@ -181,56 +172,53 @@ func _handle_movement(delta: float) -> void:
 func _apply_crouch_transition(delta: float) -> void:
 	var target_h: float = crouching_height if current_stance == Stance.CROUCHING else standing_height
 	var target_head_y: float = crouching_head_y if current_stance == Stance.CROUCHING else standing_head_y
-
-	# Плавно меняем высоту капсулы
+	# плавное изменение высоты капсулы
 	if capsule:
 		capsule.height = move_toward(capsule.height, target_h, crouch_transition_speed * delta)
 		collision_shape.position.y = capsule.height * 0.5
-
-	# Плавно перемещаем базовую высоту головы
+	# голова
 	head.position.y = move_toward(head.position.y, target_head_y, crouch_transition_speed * delta)
+
+func _process_interaction() -> void:
+	if Input.is_action_just_pressed("interact"):
+		if interact_ray and interact_ray.is_colliding():
+			var obj = interact_ray.get_collider()
+			if obj and obj.has_method("interact"):
+				obj.call("interact")
 
 func _apply_head_bob(delta: float) -> void:
 	if not bob_enabled:
 		camera.position = Vector3.ZERO
 		return
-
 	var horizontal_speed := Vector2(velocity.x, velocity.z).length()
-
 	if is_on_floor() and horizontal_speed > 0.5:
 		var speed_factor := horizontal_speed / walk_speed
 		bob_phase += delta * bob_freq * speed_factor
-
 		var bob_offset_y := sin(bob_phase) * bob_amp
 		var bob_offset_x := cos(bob_phase * 0.5) * (bob_amp * 0.6)
-
 		camera.position.y = lerp(camera.position.y, bob_offset_y, delta * 12.0)
 		camera.position.x = lerp(camera.position.x, bob_offset_x, delta * 12.0)
 	else:
 		bob_phase = 0.0
-		camera.position = lerp(camera.position, Vector3.ZERO, delta * 10.0)
+		camera.position = camera.position.linear_interpolate(Vector3.ZERO, delta * 10.0)
 
 func _apply_fov_change(delta: float) -> void:
 	if not fov_change:
 		return
-
 	var target_fov: float = default_fov
 	if current_stance == Stance.SPRINTING and is_on_floor() and velocity.length() > walk_speed:
 		target_fov = default_fov + sprint_fov_boost
-
 	camera.fov = lerp(camera.fov, target_fov, delta * fov_transition_speed)
 
 func _check_landing() -> void:
 	if not was_on_floor and is_on_floor():
-		landed.emit()
+		emit_signal("landed")
 	was_on_floor = is_on_floor()
 
-## Уровень создаваемого шума: 0.0 (покой), 0.2 (присед), 0.6 (шаг), 1.0 (бег)
 func get_noise_level() -> float:
 	var horizontal_speed := Vector2(velocity.x, velocity.z).length()
 	if horizontal_speed < 0.1:
 		return 0.0
-
 	match current_stance:
 		Stance.CROUCHING:
 			return 0.2
@@ -240,7 +228,6 @@ func get_noise_level() -> float:
 			return 1.0
 	return 0.0
 
-## Регистрация действий ввода в InputMap, если они не заданы в проекте
 func _setup_input_actions() -> void:
 	var default_keys: Dictionary = {
 		"move_forward": KEY_W,
@@ -250,6 +237,7 @@ func _setup_input_actions() -> void:
 		"jump": KEY_SPACE,
 		"sprint": KEY_SHIFT,
 		"crouch": KEY_CTRL,
+		"interact": KEY_E,
 	}
 	for action in default_keys:
 		if not InputMap.has_action(action):

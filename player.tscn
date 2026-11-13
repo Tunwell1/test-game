@@ -1,4 +1,4 @@
-[gd_scene format=3 uid="uid://bhi4jx35v07ov"]
+[gd_scene load_steps=12 format=3 uid="uid://bhi4jx35v07ov"]
 
 [ext_resource type="Script" path="res://player.gd" id="1_script"]
 
@@ -20,9 +20,17 @@ shape = SubResource("CapsuleShape3D_1")
 [node name="Head" type="Node3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.6, 0)
 
-[node name="Camera3D" type="Camera3D" parent="Head"]
+[node name="CameraBoom" type="SpringArm3D" parent="Head"]
+length = 0.6
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+
+[node name="Camera3D" type="Camera3D" parent="Head/CameraBoom"]
 current = true
 fov = 75.0
+
+[node name="InteractRay" type="RayCast3D" parent="Head/CameraBoom/Camera3D"]
+cast_to = Vector3(0, 0, -2)
+enabled = true
 
 [node name="CeilingCheck" type="ShapeCast3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.1, 0)
