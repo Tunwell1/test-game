@@ -5,7 +5,7 @@
 [ext_resource type="Script" uid="uid://cwgtp0lhnuofk" path="res://Interactable.gd" id="3_interact"]
 [ext_resource type="Script" uid="uid://b1x4r37k0c073" path="res://enemy.gd" id="4_enemy"]
 [ext_resource type="Script" uid="uid://cnjr2p75ao1pj" path="res://enemy_health_overlay.gd" id="5_overlay"]
-[ext_resource type="PackedScene" uid="uid://bi1j5hedcmsdx" path="res://Wall.glb" id="6_7mycd"]
+[ext_resource type="PackedScene" path="res://Models/Wall/Default_wall/Wall.tscn" id="6_wall"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_1"]
 sky_horizon_color = Color(0.64625, 0.65575, 0.67075, 1)
@@ -140,5 +140,5 @@ shape = SubResource("BoxShape_step")
 [node name="EnemyHealthOverlay" type="CanvasLayer" parent="." unique_id=1864914020]
 script = ExtResource("5_overlay")
 
-[node name="Wall" parent="." unique_id=1595900180 instance=ExtResource("6_7mycd")]
+[node name="Wall" parent="." unique_id=1595900180 instance=ExtResource("6_wall")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -6.8060164, 0.016867638, -1.0951858)
