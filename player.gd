@@ -89,6 +89,8 @@ var current_speed_limit: float = 4.5
 @export var sprint_blend_speed: float = 3.0
 @export var speed_ramp: float = 8.0
 var footstep_timer: float = 0.0
+var step_streams: Dictionary = {}
+var land_stream: AudioStreamWAV = null
 
 func _ready() -> void:
 
@@ -118,8 +120,14 @@ func _ready() -> void:
 
 	jump_velocity = sqrt(max(2.0 * gravity * jump_height, 0.001))
 
-	if footstep_audio and not footstep_audio.stream:
-		footstep_audio.stream = _generate_footstep_wav()
+	if footstep_audio:
+		step_streams = {
+			Stance.STANDING: _generate_footstep_wav(300.0, 0.08, 50.0, 0.5, 0.0),
+			Stance.CROUCHING: _generate_footstep_wav(200.0, 0.10, 40.0, 0.4, 0.8),
+			Stance.SPRINTING: _generate_footstep_wav(380.0, 0.07, 60.0, 0.6, 0.0),
+		}
+		land_stream = _generate_footstep_wav(90.0, 0.22, 18.0, 0.5, 0.85)
+		footstep_audio.stream = step_streams[Stance.STANDING]
 
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
@@ -376,6 +384,8 @@ func _handle_footsteps(delta: float) -> void:
 func _play_footstep() -> void:
 	if not footstep_audio:
 		return
+	if step_streams.has(current_stance):
+		footstep_audio.stream = step_streams[current_stance]
 	footstep_audio.pitch_scale = randf_range(0.9, 1.1)
 	var volume: float = 0.0
 	match current_stance:
@@ -396,7 +406,9 @@ func _check_landing() -> void:
 			land_vel = -impact * land_dip_amount * 12.0
 			land_pitch = impact * deg_to_rad(land_pitch_deg)
 		if footstep_audio:
-			footstep_audio.pitch_scale = randf_range(0.75, 0.9)
+			if land_stream:
+				footstep_audio.stream = land_stream
+			footstep_audio.pitch_scale = randf_range(0.9, 1.1)
 			footstep_audio.volume_db = -9.0 + impact * 6.0
 			footstep_audio.play()
 	was_on_floor = is_on_floor()
@@ -434,16 +446,19 @@ func _setup_input_actions() -> void:
 			InputMap.action_add_event(action, ev)
 
 # Генерация короткого звука шага (белый шум с затуханием)
-func _generate_footstep_wav() -> AudioStreamWAV:
+func _generate_footstep_wav(tone_hz: float = 300.0, duration: float = 0.08, decay: float = 50.0, noise_amount: float = 0.5, smooth: float = 0.0) -> AudioStreamWAV:
 	var sample_rate: int = 22050
-	var duration: float = 0.08
 	var length: int = int(sample_rate * duration)
 	var data := PackedByteArray()
 	data.resize(length * 2)
+	var prev_noise: float = 0.0
 	for i in range(length):
 		var t := float(i) / float(sample_rate)
-		var env := exp(-t * 50.0)
-		var sample := sin(t * 300.0 * TAU) * env * 0.3 + (randf() * 2.0 - 1.0) * env * 0.5
+		var env := exp(-t * decay)
+		# smooth > 0 даёт простой ФНЧ: приглушённый звук (присед, мягкая посадка)
+		var raw_noise := randf() * 2.0 - 1.0
+		prev_noise = lerpf(raw_noise, prev_noise, smooth)
+		var sample := sin(t * tone_hz * TAU) * env * 0.3 + prev_noise * env * noise_amount
 		var val := clampi(int(sample * 16384.0), -32768, 32767)
 		data.encode_s16(i * 2, val)
 	var wav := AudioStreamWAV.new()
