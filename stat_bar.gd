@@ -18,26 +18,35 @@ var _trail_delay: float = 0.0
 var _prev: float = 100.0
 var _t: float = 0.0
 var _grad: GradientTexture2D
+var _grad_tint: Color = Color.TRANSPARENT
 
 func _init() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 func set_values(v: float, m: float) -> void:
-	max_value = maxf(m, 0.001)
-	value = clampf(v, 0.0, max_value)
+	var next_max := maxf(m, 0.001)
+	var next_value := clampf(v, 0.0, next_max)
+	if is_equal_approx(max_value, next_max) and is_equal_approx(value, next_value):
+		return
+	max_value = next_max
+	value = next_value
+	queue_redraw()
 
 func snap() -> void:
 	_shown = value
 	_trail = value
 	_prev = value
+	queue_redraw()
 
 func _gradient_for(tint: Color) -> GradientTexture2D:
-	if _grad == null:
+	if _grad == null or _grad_tint != tint:
 		_grad = UiTheme.vertical_gradient(tint.lightened(0.42), tint.darkened(0.18))
+		_grad_tint = tint
 	return _grad
 
 func _process(delta: float) -> void:
-	_t += delta
+	var old_shown := _shown
+	var old_trail := _trail
 	if value < _prev - 0.01:
 		_trail_delay = 0.45
 	_prev = value
@@ -48,7 +57,11 @@ func _process(delta: float) -> void:
 		_trail_delay -= delta
 		if _trail_delay <= 0.0:
 			_trail = move_toward(_trail, value, max_value * 0.35 * delta)
-	queue_redraw()
+	var pulsing := pulse_when_low and value / max_value < 0.25
+	if pulsing:
+		_t += delta
+	if not is_equal_approx(old_shown, _shown) or not is_equal_approx(old_trail, _trail) or pulsing:
+		queue_redraw()
 
 func _draw() -> void:
 	var bar_h := minf(thickness, size.y)

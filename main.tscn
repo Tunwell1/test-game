@@ -1,10 +1,11 @@
-[gd_scene load_steps=5 format=3 uid="uid://c8x4qvf0main1"]
+[gd_scene load_steps=6 format=3 uid="uid://c8x4qvf0main1"]
 
 [ext_resource type="Material" uid="uid://checkerboardmat01" path="res://materials/checkerboard_mat.tres" id="1_mat"]
 [ext_resource type="PackedScene" uid="uid://bhi4jx35v07ov" path="res://player.tscn" id="2_player"]
 
 [ext_resource type="Script" path="res://Interactable.gd" id="3_interact"]
 [ext_resource type="Script" path="res://enemy.gd" id="4_enemy"]
+[ext_resource type="Script" path="res://enemy_health_overlay.gd" id="5_overlay"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_1"]
 sky_horizon_color = Color(0.64625, 0.65575, 0.67075, 1)
@@ -135,3 +136,6 @@ mesh = SubResource("BoxMesh_step")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Stair3"]
 shape = SubResource("BoxShape_step")
+
+[node name="EnemyHealthOverlay" type="CanvasLayer" parent="."]
+script = ExtResource("5_overlay")

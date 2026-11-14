@@ -231,10 +231,12 @@ func take_damage(amount: float) -> void:
 		died.emit()
 
 func heal(amount: float) -> void:
-	if is_dead:
+	if is_dead or amount <= 0.0 or health >= health_max:
 		return
-	health = minf(health + amount, health_max)
-	health_changed.emit(health, health_max)
+	var previous_health := health
+	health = clampf(health + amount, 0.0, health_max)
+	if not is_equal_approx(health, previous_health):
+		health_changed.emit(health, health_max)
 
 ## Простое возрождение: перезапуск текущей сцены.
 func respawn() -> void:
@@ -569,6 +571,38 @@ func _setup_input_actions() -> void:
 			var ev := InputEventKey.new()
 			ev.physical_keycode = default_keys[action]
 			InputMap.action_add_event(action, ev)
+
+	var joypad_events := {
+		"move_left": _joy_axis_event(JOY_AXIS_LEFT_X, -1.0),
+		"move_right": _joy_axis_event(JOY_AXIS_LEFT_X, 1.0),
+		"move_forward": _joy_axis_event(JOY_AXIS_LEFT_Y, -1.0),
+		"move_back": _joy_axis_event(JOY_AXIS_LEFT_Y, 1.0),
+		"jump": _joy_button_event(JOY_BUTTON_A),
+		"sprint": _joy_button_event(JOY_BUTTON_LEFT_STICK),
+		"crouch": _joy_button_event(JOY_BUTTON_B),
+		"interact": _joy_button_event(JOY_BUTTON_X),
+	}
+	for action in joypad_events:
+		_add_joypad_event_if_missing(action, joypad_events[action])
+
+func _joy_axis_event(axis: int, value: float) -> InputEventJoypadMotion:
+	var event := InputEventJoypadMotion.new()
+	event.axis = axis
+	event.axis_value = value
+	return event
+
+func _joy_button_event(button: int) -> InputEventJoypadButton:
+	var event := InputEventJoypadButton.new()
+	event.button_index = button
+	return event
+
+func _add_joypad_event_if_missing(action: String, event: InputEvent) -> void:
+	if not InputMap.has_action(action):
+		InputMap.add_action(action)
+	for existing in InputMap.action_get_events(action):
+		if existing is InputEventJoypadButton or existing is InputEventJoypadMotion:
+			return
+	InputMap.action_add_event(action, event)
 
 # Генерация короткого звука шага (белый шум с затуханием)
 func _generate_footstep_wav(tone_hz: float = 300.0, duration: float = 0.08, decay: float = 50.0, noise_amount: float = 0.5, smooth: float = 0.0) -> AudioStreamWAV:

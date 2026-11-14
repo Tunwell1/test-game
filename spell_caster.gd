@@ -2,7 +2,7 @@ class_name SpellCaster
 extends Node
 
 ## Безмолвное колдовство: ни слов, ни жестов — только намерение.
-## F — применить выбранное заклинание, Q — переключить, 1–4 — выбрать стартовую школу.
+## F/Q и 1–4 на клавиатуре или назначения геймпада из InputMap.
 
 signal spell_cast(spell_id: String)
 signal selected_changed(spell_id: String)
@@ -44,9 +44,38 @@ func _add_actions() -> void:
 	for action in keys:
 		if not InputMap.has_action(action):
 			InputMap.add_action(action)
+		if InputMap.action_get_events(action).is_empty():
 			var ev := InputEventKey.new()
 			ev.physical_keycode = keys[action]
 			InputMap.action_add_event(action, ev)
+
+	var joypad_events := {
+		"cast_spell": _joy_axis_event(JOY_AXIS_TRIGGER_RIGHT, 1.0),
+		"next_spell": _joy_button_event(JOY_BUTTON_RIGHT_SHOULDER),
+		"pick_school_1": _joy_button_event(JOY_BUTTON_DPAD_UP),
+		"pick_school_2": _joy_button_event(JOY_BUTTON_DPAD_RIGHT),
+		"pick_school_3": _joy_button_event(JOY_BUTTON_DPAD_DOWN),
+		"pick_school_4": _joy_button_event(JOY_BUTTON_DPAD_LEFT),
+	}
+	for action in joypad_events:
+		var has_joypad := false
+		for existing in InputMap.action_get_events(action):
+			if existing is InputEventJoypadButton or existing is InputEventJoypadMotion:
+				has_joypad = true
+				break
+		if not has_joypad:
+			InputMap.action_add_event(action, joypad_events[action])
+
+func _joy_axis_event(axis: int, value: float) -> InputEventJoypadMotion:
+	var event := InputEventJoypadMotion.new()
+	event.axis = axis
+	event.axis_value = value
+	return event
+
+func _joy_button_event(button: int) -> InputEventJoypadButton:
+	var event := InputEventJoypadButton.new()
+	event.button_index = button
+	return event
 
 ## Доступные игроку заклинания (по изученным школам).
 func available_spells() -> Array[String]:
