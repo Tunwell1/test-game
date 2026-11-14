@@ -12,6 +12,9 @@ var lifetime: float = 4.0
 var caster: Node3D = null
 
 func _ready() -> void:
+	# Мир (1), интерактивные объекты (4), враги (8)
+	collision_layer = 0
+	collision_mask = 1 | 4 | 8
 	body_entered.connect(_on_body_entered)
 
 func _physics_process(delta: float) -> void:

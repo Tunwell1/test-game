@@ -128,6 +128,7 @@ func _ready() -> void:
 	# Initialize input actions once
 	_setup_input_actions()
 
+	add_to_group("player")
 	health = health_max
 	mana = mana_max
 	magic_book = MagicBook.new()
@@ -524,6 +525,17 @@ func _check_landing() -> void:
 			footstep_audio.volume_db = -9.0 + impact * 6.0
 			footstep_audio.play()
 	was_on_floor = is_on_floor()
+
+## Заметность для зрения врагов, 0..1. Присед и неподвижность уменьшают её.
+## Освещённость добавится позже.
+func get_visibility() -> float:
+	var moving := Vector2(velocity.x, velocity.z).length() > 0.3
+	var v := 1.0
+	if current_stance == Stance.CROUCHING:
+		v = 0.5 if moving else 0.35
+	elif not moving:
+		v = 0.8
+	return v
 
 func get_noise_level() -> float:
 	var magic := spell_caster.magic_noise if spell_caster else 0.0
