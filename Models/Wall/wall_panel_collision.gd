@@ -1,8 +1,9 @@
 extends StaticBody3D
 
 const STONE_ALBEDO: Texture2D = preload("res://Models/Wall/Default_wall/albedo.png")
+const WOOD_ALBEDO: Texture2D = preload("res://Models/Wall/Wall_door/door.png")
 
-## Applies a readable stone material and builds concave static colliders from the
+## Applies the source colors/textures and builds concave colliders from the
 ## imported meshes, preserving the door and window openings.
 func _ready() -> void:
 	var mesh_instances: Array[MeshInstance3D] = []
@@ -43,28 +44,41 @@ func _apply_wall_materials(mesh_instance: MeshInstance3D) -> void:
 		if source is BaseMaterial3D:
 			original_color = (source as BaseMaterial3D).albedo_color
 
-		var is_stone := material_name.begins_with("color_") or _is_blue_stone(original_color)
-		if is_stone:
-			material.albedo_texture = STONE_ALBEDO
-			material.albedo_color = Color.WHITE
-			material.roughness = 0.95
-		elif material_name.begins_with("glass"):
+		if material_name.begins_with("glass"):
 			material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 			material.albedo_color = Color(0.64, 0.79, 0.88, 0.32)
 			material.roughness = 0.16
-		elif maxf(original_color.r, maxf(original_color.g, original_color.b)) < 0.18:
-			material.albedo_color = Color(0.38, 0.37, 0.35, 1.0)
+		elif _is_wood(original_color):
+			material.albedo_texture = WOOD_ALBEDO
+			material.albedo_color = Color.WHITE
+			material.roughness = 0.78
+		else:
+			# The FBX files contain very dark flat material factors and no texture
+			# links. Use the project's stone albedo instead of rendering near-black.
+			material.albedo_texture = STONE_ALBEDO
+			material.albedo_color = _stone_tint(original_color)
+			material.roughness = 0.95
 
 		mesh_instance.set_surface_override_material(surface_index, material)
 
 
-func _is_blue_stone(color: Color) -> bool:
-	return (
-		color.r < 0.22
-		and color.g > color.r * 1.15
-		and color.b > color.r * 1.3
-		and color.b < 0.35
+func _is_wood(color: Color) -> bool:
+	return color.r > color.g * 1.35 and color.g > color.b * 1.25 and color.r > 0.12
+
+
+func _stone_tint(color: Color) -> Color:
+	return Color(
+		maxf(0.68, _linear_to_srgb(color.r)),
+		maxf(0.70, _linear_to_srgb(color.g)),
+		maxf(0.73, _linear_to_srgb(color.b)),
+		1.0
 	)
+
+
+func _linear_to_srgb(channel: float) -> float:
+	if channel <= 0.0031308:
+		return channel * 12.92
+	return 1.055 * pow(channel, 1.0 / 2.4) - 0.055
 
 
 func _collect_mesh_instances(node: Node, result: Array[MeshInstance3D]) -> void:
