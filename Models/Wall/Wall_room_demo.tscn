@@ -8,14 +8,14 @@
 [node name="WallRoomDemo" type="Node3D"]
 
 [node name="DoorWall" type="StaticBody3D" parent="."]
-position = Vector3(-1.7, 0, 0.223)
+position = Vector3(-1.7, 0, -1.477)
 script = ExtResource("4_collision")
 
 [node name="Visual" parent="DoorWall" instance=ExtResource("1_door_wall")]
 scale = Vector3(0.5, 0.5, 0.5)
 
 [node name="BackWallTwoWindows" type="StaticBody3D" parent="."]
-position = Vector3(1.7, 0, -0.223)
+position = Vector3(1.7, 0, 1.477)
 rotation = Vector3(0, 3.141593, 0)
 script = ExtResource("4_collision")
 
@@ -23,7 +23,7 @@ script = ExtResource("4_collision")
 scale = Vector3(0.5, 0.5, 0.5)
 
 [node name="LeftWallOneWindow" type="StaticBody3D" parent="."]
-position = Vector3(0.223, 0, 1.7)
+position = Vector3(-1.477, 0, 1.7)
 rotation = Vector3(0, 1.570796, 0)
 script = ExtResource("4_collision")
 
@@ -31,7 +31,7 @@ script = ExtResource("4_collision")
 scale = Vector3(0.5, 0.5, 0.5)
 
 [node name="RightWallOneWindow" type="StaticBody3D" parent="."]
-position = Vector3(-0.223, 0, -1.7)
+position = Vector3(1.477, 0, -1.7)
 rotation = Vector3(0, -1.570796, 0)
 script = ExtResource("4_collision")
 
