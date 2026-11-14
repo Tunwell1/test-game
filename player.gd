@@ -15,6 +15,9 @@ enum Stance { STANDING, CROUCHING, SPRINTING }
 @export var air_accel: float = 12.0
 @export var air_friction: float = 3.0
 
+@export_group("Подъём на ступеньки")
+@export_range(0.1, 1.0, 0.05) var step_height: float = 0.65
+
 @export_group("Прыжок и гравитация")
 @export var jump_height: float = 1.1
 @export var coyote_time: float = 0.1
@@ -69,6 +72,7 @@ var stamina: float = 100.0
 var stamina_regen_timer: float = 0.0
 var exhausted: bool = false
 var land_offset: float = 0.0
+var step_offset: float = 0.0
 var land_vel: float = 0.0
 var land_pitch: float = 0.0
 var bob_y: float = 0.0
@@ -120,15 +124,7 @@ func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event.is_action_pressed("ui_cancel") or (event is InputEventKey and event.pressed and event.physical_keycode == KEY_ESCAPE):
-		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-		else:
-			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-
-	if event is InputEventMouseButton and event.pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
-		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-
+	# Пауза и ESC обрабатываются в pause_menu.gd
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		rotate_y(-event.relative.x * mouse_sensitivity)
 		head.rotate_x(-event.relative.y * mouse_sensitivity)
@@ -148,6 +144,7 @@ func _physics_process(delta: float) -> void:
 	_handle_footsteps(delta)
 	_process_interaction()
 	fall_speed = velocity.y
+	_try_step_up(delta)
 	move_and_slide()
 	_check_landing()
 
@@ -294,9 +291,39 @@ func _apply_head_bob(delta: float) -> void:
 		bob_phase = 0.0
 		bob_y = lerpf(bob_y, 0.0, delta * 10.0)
 		bob_node.position.x = lerpf(bob_node.position.x, 0.0, delta * 10.0)
-	bob_node.position.y = bob_y + land_offset
+	bob_node.position.y = bob_y + land_offset + step_offset
+
+# Подъём на ступеньки: приподнимаем тело, если препятствие ниже step_height
+func _try_step_up(delta: float) -> void:
+	if not is_on_floor() or velocity.y > 0.1:
+		return
+	var h := Vector3(velocity.x, 0.0, velocity.z)
+	if h.length() < 0.1:
+		return
+	# Проба вперёд минимум 0.1 м, чтобы заметить ступеньку заранее
+	var motion := h.normalized() * maxf(h.length() * delta, 0.1)
+	var xf := global_transform
+	if not test_move(xf, motion):
+		return
+	var up := Vector3.UP * step_height
+	if test_move(xf, up):
+		return
+	var raised := xf.translated(up)
+	if test_move(raised, motion):
+		return
+	var col := KinematicCollision3D.new()
+	if not test_move(raised.translated(motion), -up, col):
+		return
+	if col.get_normal().angle_to(Vector3.UP) > floor_max_angle:
+		return
+	var gained := step_height + col.get_travel().y
+	if gained < 0.01:
+		return
+	global_position.y += gained
+	step_offset -= gained
 
 func _apply_camera_feel(delta: float) -> void:
+	step_offset = lerpf(step_offset, 0.0, delta * 12.0)
 	# Пружина приземления: резкий толчок вниз с затухающим отскоком
 	land_vel += (-land_spring * land_offset - land_damping * land_vel) * delta
 	land_offset += land_vel * delta
