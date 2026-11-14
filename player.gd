@@ -4,7 +4,20 @@ extends CharacterBody3D
 signal stance_changed(stance: Stance)
 signal landed
 
+signal died
+signal health_changed(current: float, maximum: float)
+signal air_jumped
+signal passive_unlocked(skill: Passive)
+
 enum Stance { STANDING, CROUCHING, SPRINTING }
+enum Passive { DOUBLE_JUMP }
+
+@export_group("Пассивные навыки")
+## Список открытых пассивных навыков (по умолчанию двойной прыжок открыт).
+@export var unlocked_passives: Array[Passive] = [Passive.DOUBLE_JUMP]
+## Сила второго прыжка относительно обычного.
+@export_range(0.3, 1.5, 0.05) var double_jump_power: float = 0.9
+var air_jumps_used: int = 0
 
 @export_group("Движение")
 @export var walk_speed: float = 4.5
@@ -44,6 +57,17 @@ enum Stance { STANDING, CROUCHING, SPRINTING }
 @export var sprint_fov_boost: float = 8.0
 @export var fov_transition_speed: float = 8.0
 
+@export_group("Здоровье")
+@export var health_max: float = 100.0
+## Скорость падения (м/с), ниже которой урона нет.
+@export var fall_damage_threshold: float = 12.0
+@export var fall_damage_per_speed: float = 8.0
+
+@export_group("Мана")
+@export var mana_max: float = 100.0
+@export var mana_regen: float = 8.0
+@export var mana_regen_delay: float = 1.5
+
 @export_group("Выносливость")
 @export var stamina_max: float = 100.0
 @export var stamina_drain: float = 25.0
@@ -67,6 +91,13 @@ var jump_buffer_timer: float = 0.0
 var was_on_floor: bool = false
 var bob_phase: float = 0.0
 var capsule: CapsuleShape3D = null
+
+var health: float = 100.0
+var is_dead: bool = false
+var mana: float = 100.0
+var mana_regen_timer: float = 0.0
+var magic_book: MagicBook = null
+var spell_caster: SpellCaster = null
 
 var stamina: float = 100.0
 var stamina_regen_timer: float = 0.0
@@ -96,6 +127,15 @@ func _ready() -> void:
 
 	# Initialize input actions once
 	_setup_input_actions()
+
+	health = health_max
+	mana = mana_max
+	magic_book = MagicBook.new()
+	magic_book.name = "MagicBook"
+	add_child(magic_book)
+	spell_caster = SpellCaster.new()
+	spell_caster.name = "SpellCaster"
+	add_child(spell_caster)
 
 	if collision_shape and collision_shape.shape:
 		collision_shape.shape = collision_shape.shape.duplicate()
@@ -139,7 +179,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		head.rotation.x = clampf(head.rotation.x, deg_to_rad(-89.0), deg_to_rad(89.0))
 
 func _physics_process(delta: float) -> void:
+	if is_dead:
+		velocity.x = move_toward(velocity.x, 0.0, ground_friction * delta)
+		velocity.z = move_toward(velocity.z, 0.0, ground_friction * delta)
+		if not is_on_floor():
+			velocity.y -= gravity * delta
+		move_and_slide()
+		return
 	_update_timers(delta)
+	_handle_mana(delta)
 	_handle_gravity(delta)
 	_handle_stamina(delta)
 	_handle_stance()
@@ -170,6 +218,43 @@ func _update_timers(delta: float) -> void:
 func _handle_gravity(delta: float) -> void:
 	if not is_on_floor():
 		velocity.y -= gravity * delta
+
+# --- Здоровье ---
+func take_damage(amount: float) -> void:
+	if is_dead or amount <= 0.0:
+		return
+	health = maxf(health - amount, 0.0)
+	health_changed.emit(health, health_max)
+	if health <= 0.0:
+		is_dead = true
+		died.emit()
+
+func heal(amount: float) -> void:
+	if is_dead:
+		return
+	health = minf(health + amount, health_max)
+	health_changed.emit(health, health_max)
+
+## Простое возрождение: перезапуск текущей сцены.
+func respawn() -> void:
+	get_tree().reload_current_scene()
+
+# --- Мана (тратят только активные заклинания, пассивные навыки её не трогают) ---
+func has_mana(amount: float) -> bool:
+	return mana >= amount
+
+func spend_mana(amount: float) -> bool:
+	if is_dead or mana < amount:
+		return false
+	mana -= amount
+	mana_regen_timer = mana_regen_delay
+	return true
+
+func _handle_mana(delta: float) -> void:
+	if mana_regen_timer > 0.0:
+		mana_regen_timer -= delta
+	else:
+		mana = minf(mana + mana_regen * delta, mana_max)
 
 func _handle_stamina(delta: float) -> void:
 	if current_stance == Stance.SPRINTING and is_on_floor():
@@ -207,10 +292,35 @@ func _handle_stance() -> void:
 		stance_changed.emit(current_stance)
 
 func _handle_jump() -> void:
-	if jump_buffer_timer > 0.0 and coyote_timer > 0.0 and current_stance != Stance.CROUCHING:
+	if is_on_floor():
+		air_jumps_used = 0
+
+	if jump_buffer_timer <= 0.0 or current_stance == Stance.CROUCHING:
+		return
+
+	if coyote_timer > 0.0:
 		velocity.y = jump_velocity
 		jump_buffer_timer = 0.0
 		coyote_timer = 0.0
+	elif has_passive(Passive.DOUBLE_JUMP) and air_jumps_used < 1:
+		# Пассивный навык: не тратит ни выносливость, ни магию
+		air_jumps_used += 1
+		velocity.y = jump_velocity * double_jump_power
+		jump_buffer_timer = 0.0
+		air_jumped.emit()
+
+# --- Пассивные навыки ---
+# Работают постоянно и не расходуют ресурсы (ни магию, ни выносливость).
+func has_passive(skill: Passive) -> bool:
+	return unlocked_passives.has(skill)
+
+func unlock_passive(skill: Passive) -> void:
+	if not unlocked_passives.has(skill):
+		unlocked_passives.append(skill)
+		passive_unlocked.emit(skill)
+
+func lock_passive(skill: Passive) -> void:
+	unlocked_passives.erase(skill)
 
 func _handle_movement(delta: float) -> void:
 	var input_2d := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
@@ -401,6 +511,8 @@ func _play_footstep() -> void:
 func _check_landing() -> void:
 	if not was_on_floor and is_on_floor():
 		landed.emit()
+		if -fall_speed > fall_damage_threshold:
+			take_damage((-fall_speed - fall_damage_threshold) * fall_damage_per_speed)
 		var impact := clampf(-fall_speed / jump_velocity, 0.0, 2.5)
 		if impact > 0.15:
 			land_vel = -impact * land_dip_amount * 12.0
@@ -414,17 +526,18 @@ func _check_landing() -> void:
 	was_on_floor = is_on_floor()
 
 func get_noise_level() -> float:
+	var magic := spell_caster.magic_noise if spell_caster else 0.0
 	var horizontal_speed := Vector2(velocity.x, velocity.z).length()
 	if horizontal_speed < 0.1:
-		return 0.0
+		return magic
 	match current_stance:
 		Stance.CROUCHING:
-			return 0.2
+			return maxf(0.2, magic)
 		Stance.STANDING:
-			return 0.6
+			return maxf(0.6, magic)
 		Stance.SPRINTING:
-			return 1.0
-	return 0.0
+			return maxf(1.0, magic)
+	return magic
 
 func _setup_input_actions() -> void:
 	var default_keys: Dictionary = {
