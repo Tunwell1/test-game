@@ -30,30 +30,37 @@ func _ready() -> void:
 func _apply_wall_materials(mesh_instance: MeshInstance3D) -> void:
 	for surface_index in range(mesh_instance.mesh.get_surface_count()):
 		var source := mesh_instance.mesh.surface_get_material(surface_index)
-		if source == null:
-			continue
-
 		var material := StandardMaterial3D.new()
 		if source is StandardMaterial3D:
 			material = (source as StandardMaterial3D).duplicate() as StandardMaterial3D
 		if material == null:
 			material = StandardMaterial3D.new()
 
-		var material_name := source.resource_name.to_lower()
+		var material_name := mesh_instance.mesh.surface_get_name(surface_index).to_lower()
+		if source != null:
+			material_name += " " + source.resource_name.to_lower()
 		var original_color := Color.WHITE
+		var has_source_color := false
+		var source_is_transparent := false
 		if source is BaseMaterial3D:
-			original_color = (source as BaseMaterial3D).albedo_color
+			var source_material := source as BaseMaterial3D
+			original_color = source_material.albedo_color
+			has_source_color = true
+			source_is_transparent = source_material.transparency != BaseMaterial3D.TRANSPARENCY_DISABLED
 
-		if material_name.begins_with("glass") or _is_glass(original_color):
+		# FBX importers do not always retain the material name, so also use its
+		# source transparency and pale-blue albedo to recognize window panes.
+		if "glass" in material_name or source_is_transparent or (has_source_color and _is_glass(original_color)):
 			material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 			material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 			material.cull_mode = BaseMaterial3D.CULL_DISABLED
-			material.albedo_color = Color(0.64, 0.79, 0.88, 0.24)
+			material.albedo_color = Color(0.64, 0.79, 0.88, 0.18)
 			material.roughness = 0.16
 		elif _is_wood(original_color):
 			material.albedo_texture = WOOD_ALBEDO
 			material.albedo_color = Color.WHITE
 			material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			material.cull_mode = BaseMaterial3D.CULL_DISABLED
 			material.roughness = 0.78
 		else:
 			# The FBX files contain very dark flat material factors and no texture
@@ -61,13 +68,21 @@ func _apply_wall_materials(mesh_instance: MeshInstance3D) -> void:
 			material.albedo_texture = STONE_ALBEDO
 			material.albedo_color = _stone_tint(original_color)
 			material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			# The panels face outward; render both sides so their backs are not black
+			# or invisible when viewed from inside the room.
+			material.cull_mode = BaseMaterial3D.CULL_DISABLED
 			material.roughness = 0.95
 
 		mesh_instance.set_surface_override_material(surface_index, material)
 
 
 func _is_glass(color: Color) -> bool:
-	return color.r > 0.7 and color.g > 0.75 and color.b > 0.85
+	return color.a < 0.98 or (
+		color.r > 0.7
+		and color.g > color.r * 1.01
+		and color.b > color.r * 1.04
+		and color.b > 0.85
+	)
 
 
 func _is_wood(color: Color) -> bool:
