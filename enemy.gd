@@ -18,6 +18,7 @@ enum State { PATROL, SUSPICIOUS, CHASE, SEARCH, DEAD }
 
 @export_group("Чувства")
 @export var view_distance: float = 14.0
+## Полная ширина конуса зрения в градусах.
 @export var view_angle_deg: float = 70.0
 ## Радиус слуха при уровне шума 1.0 (бег). Меньший шум слышен ближе.
 @export var hearing_radius: float = 12.0
@@ -53,6 +54,8 @@ var burn_timer: float = 0.0
 var knock: Vector3 = Vector3.ZERO
 var _mat: StandardMaterial3D
 var _indicator: Label3D
+var _seen_player_strength: float = 0.0
+var _heard_player: bool = false
 
 func _ready() -> void:
 	health = health_max
@@ -133,9 +136,11 @@ func _can_see_player() -> float:
 		return 0.0
 	var fwd := -global_transform.basis.z
 	var flat := Vector3(to_p.x, 0, to_p.z).normalized()
-	if rad_to_deg(fwd.angle_to(flat)) > view_angle_deg:
+	# view_angle_deg задаёт полную ширину конуса, а не полуугол.
+	if rad_to_deg(fwd.angle_to(flat)) > view_angle_deg * 0.5:
 		return 0.0
-	var q := PhysicsRayQueryParameters3D.create(_eye_pos(), target, 1, [get_rid()])
+	# Препятствиями для зрения считаются мир и интерактивные объекты.
+	var q := PhysicsRayQueryParameters3D.create(_eye_pos(), target, 1 | 4, [get_rid()])
 	if not get_world_3d().direct_space_state.intersect_ray(q).is_empty():
 		return 0.0
 	# Чем ближе и заметнее игрок, тем быстрее обнаружение
@@ -150,12 +155,12 @@ func _hear_player() -> bool:
 	return global_position.distance_to(player.global_position) <= hearing_radius * noise
 
 func _perceive(delta: float) -> void:
-	var seen := _can_see_player()
-	var heard := _hear_player()
-	if seen > 0.0:
-		awareness = minf(awareness + detect_rate * seen * delta * (3.0 if state == State.CHASE else 1.0), 1.0)
+	_seen_player_strength = _can_see_player()
+	_heard_player = _hear_player()
+	if _seen_player_strength > 0.0:
+		awareness = minf(awareness + detect_rate * _seen_player_strength * delta * (3.0 if state == State.CHASE else 1.0), 1.0)
 		last_known_pos = player.global_position
-	elif heard:
+	elif _heard_player:
 		awareness = minf(awareness + detect_rate * 0.6 * delta, 1.0)
 		last_known_pos = player.global_position
 	elif state != State.CHASE:
@@ -184,7 +189,7 @@ func _update_state(delta: float) -> void:
 			elif awareness < 0.1:
 				_set_state(State.PATROL)
 		State.CHASE:
-			if _can_see_player() <= 0.0 and not _hear_player():
+			if _seen_player_strength <= 0.0 and not _heard_player:
 				_set_state(State.SEARCH)
 		State.SEARCH:
 			if awareness >= 1.0:
@@ -255,9 +260,9 @@ func _try_attack() -> void:
 # --- Получение урона и эффектов ---
 
 func take_damage(amount: float) -> void:
-	if state == State.DEAD:
+	if state == State.DEAD or amount <= 0.0:
 		return
-	health -= amount
+	health = maxf(health - amount, 0.0)
 	# Удар мгновенно выдаёт игрока
 	awareness = 1.0
 	if player:

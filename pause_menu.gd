@@ -20,12 +20,57 @@ var _base_sensitivity := 0.0
 var _time := 0.0
 var _visible_amount := 0.0
 var _scrim: GradientTexture2D
+var _settings := ConfigFile.new()
+var _saved_volume_percent: float = 100.0
+var _saved_sensitivity_percent: float = 100.0
+const SETTINGS_PATH := "user://settings.cfg"
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	layer = 10
+	_load_settings()
 	_build()
+	_apply_saved_settings()
 	_set_paused(false)
+
+func _load_settings() -> void:
+	var bus := AudioServer.get_bus_index("Master")
+	if bus >= 0:
+		_saved_volume_percent = round(db_to_linear(AudioServer.get_bus_volume_db(bus)) * 100.0)
+	if _settings.load(SETTINGS_PATH) == OK:
+		_saved_volume_percent = float(_settings.get_value("audio", "volume_percent", _saved_volume_percent))
+		_saved_sensitivity_percent = float(_settings.get_value("controls", "sensitivity_percent", 100.0))
+	_saved_volume_percent = clampf(_saved_volume_percent, 0.0, 100.0)
+	_saved_sensitivity_percent = clampf(_saved_sensitivity_percent, 25.0, 200.0)
+
+func _apply_saved_settings() -> void:
+	_apply_volume(_saved_volume_percent)
+	if volume_label:
+		volume_label.text = "%d%%" % int(round(_saved_volume_percent))
+	if volume_slider:
+		volume_slider.value = _saved_volume_percent
+	if sensitivity_label:
+		sensitivity_label.text = "%d%%" % int(round(_saved_sensitivity_percent))
+	if sensitivity_slider:
+		sensitivity_slider.value = _saved_sensitivity_percent
+	var p := _player()
+	if p != null:
+		p.mouse_sensitivity = _base_sensitivity * _saved_sensitivity_percent / 100.0
+
+func _apply_volume(value: float) -> void:
+	var bus := AudioServer.get_bus_index("Master")
+	if bus < 0:
+		return
+	AudioServer.set_bus_mute(bus, value <= 0.0)
+	AudioServer.set_bus_volume_db(bus, linear_to_db(maxf(value / 100.0, 0.001)))
+
+func _save_settings() -> void:
+	_settings.set_value("audio", "volume_percent", _saved_volume_percent)
+	_settings.set_value("controls", "sensitivity_percent", _saved_sensitivity_percent)
+	_settings.save(SETTINGS_PATH)
+
+func _exit_tree() -> void:
+	_save_settings()
 
 func _build() -> void:
 	root = Control.new()
@@ -174,8 +219,7 @@ func _build_settings() -> void:
 	var vol_label := _label("ГРОМКОСТЬ", 9, UiTheme.fade(UiTheme.MUTED, 0.95), true)
 	vol_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vol_row.add_child(vol_label)
-	var bus := AudioServer.get_bus_index("Master")
-	var bus_pct := int(round(db_to_linear(AudioServer.get_bus_volume_db(bus)) * 100.0)) if bus >= 0 else 100
+	var bus_pct := int(round(_saved_volume_percent))
 	volume_label = _serif_label("%d%%" % bus_pct, 16, UiTheme.GOLD)
 	vol_row.add_child(volume_label)
 	volume_slider = _new_slider(0, 100, bus_pct)
@@ -194,13 +238,13 @@ func _build_settings() -> void:
 	sens_row.add_child(sensitivity_label)
 	var p := _player()
 	_base_sensitivity = p.mouse_sensitivity if p != null else 0.0025
-	sensitivity_slider = _new_slider(25, 200, 100)
+	sensitivity_slider = _new_slider(25, 200, _saved_sensitivity_percent)
 	sensitivity_slider.value_changed.connect(_on_sensitivity_changed)
 	settings_group.add_child(sensitivity_slider)
 
 	settings_group.add_child(_spacer(8))
 	settings_group.add_child(_rule(Color(1, 1, 1, 0.10), 320.0))
-	settings_group.add_child(_label("Настройки действуют до выхода из игры.", 10,
+	settings_group.add_child(_label("Настройки сохраняются между запусками.", 10,
 		UiTheme.fade(UiTheme.MUTED, 0.8)))
 
 	var back := Button.new()
@@ -295,14 +339,14 @@ func _player() -> Player:
 
 func _on_volume_changed(value: float) -> void:
 	volume_label.text = "%d%%" % int(value)
-	var bus := AudioServer.get_bus_index("Master")
-	if bus < 0:
-		return
-	AudioServer.set_bus_mute(bus, value <= 0.0)
-	AudioServer.set_bus_volume_db(bus, linear_to_db(maxf(value / 100.0, 0.001)))
+	_saved_volume_percent = value
+	_apply_volume(value)
+	_save_settings()
 
 func _on_sensitivity_changed(value: float) -> void:
 	sensitivity_label.text = "%d%%" % int(value)
+	_saved_sensitivity_percent = value
+	_save_settings()
 	var p := _player()
 	if p != null:
 		if _base_sensitivity <= 0.0:

@@ -231,10 +231,12 @@ func take_damage(amount: float) -> void:
 		died.emit()
 
 func heal(amount: float) -> void:
-	if is_dead:
+	if is_dead or amount <= 0.0 or health >= health_max:
 		return
-	health = minf(health + amount, health_max)
-	health_changed.emit(health, health_max)
+	var previous_health := health
+	health = clampf(health + amount, 0.0, health_max)
+	if not is_equal_approx(health, previous_health):
+		health_changed.emit(health, health_max)
 
 ## Простое возрождение: перезапуск текущей сцены.
 func respawn() -> void:

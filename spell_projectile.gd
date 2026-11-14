@@ -10,6 +10,7 @@ var knockback: float = 0.0
 var effect: String = ""
 var lifetime: float = 4.0
 var caster: Node3D = null
+var _spent: bool = false
 
 func _ready() -> void:
 	# Мир (1), интерактивные объекты (4), враги (8)
@@ -18,14 +19,30 @@ func _ready() -> void:
 	body_entered.connect(_on_body_entered)
 
 func _physics_process(delta: float) -> void:
-	global_position += direction * speed * delta
+	var from := global_position
+	var to := from + direction * speed * delta
+	# Area3D overlap-сигналы сами по себе могут пропустить тонкое препятствие,
+	# если снаряд за тик переместился дальше его толщины. Проверяем весь сегмент.
+	var query := PhysicsRayQueryParameters3D.create(from, to, collision_mask)
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	if not hit.is_empty():
+		global_position = hit.position
+		var body := hit.collider as Node3D
+		if body != null:
+			_apply_hit(body)
+			return
+	global_position = to
 	lifetime -= delta
 	if lifetime <= 0.0:
 		queue_free()
 
 func _on_body_entered(body: Node3D) -> void:
-	if body == caster:
+	_apply_hit(body)
+
+func _apply_hit(body: Node3D) -> void:
+	if _spent or body == caster or not is_instance_valid(body):
 		return
+	_spent = true
 	if damage > 0.0 and body.has_method("take_damage"):
 		body.call("take_damage", damage)
 	if knockback > 0.0:

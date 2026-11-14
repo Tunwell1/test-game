@@ -44,6 +44,7 @@ func _add_actions() -> void:
 	for action in keys:
 		if not InputMap.has_action(action):
 			InputMap.add_action(action)
+		if InputMap.action_get_events(action).is_empty():
 			var ev := InputEventKey.new()
 			ev.physical_keycode = keys[action]
 			InputMap.action_add_event(action, ev)
