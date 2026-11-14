@@ -33,6 +33,8 @@ var selected_index: int = 0
 var magic_noise: float = 0.0
 
 func _ready() -> void:
+	# Даёт выбрать школу клавишами 1–4, пока мир стоит на паузе.
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	_add_actions()
 
 func _add_actions() -> void:
@@ -65,15 +67,22 @@ func selected_spell() -> String:
 func _process(delta: float) -> void:
 	if player == null or player.is_dead:
 		return
-	cooldown_timer = maxf(cooldown_timer - delta, 0.0)
-	magic_noise = move_toward(magic_noise, 0.0, delta * 0.5)
 
 	var book := player.magic_book
 	if book.primary_school == -1:
+		# Выбор школы идёт на паузе, поэтому обрабатывается до проверки паузы.
 		for i in 4:
 			if Input.is_action_just_pressed("pick_school_%d" % (i + 1)):
 				book.choose_primary(MagicBook.BASE_SCHOOLS[i])
 		return
+
+	# Мир на паузе (меню, экран смерти): не тикаем кулдаун и не принимаем
+	# управление, иначе F в меню тратит ману и стреляет после снятия паузы.
+	if get_tree().paused:
+		return
+
+	cooldown_timer = maxf(cooldown_timer - delta, 0.0)
+	magic_noise = move_toward(magic_noise, 0.0, delta * 0.5)
 
 	if Input.is_action_just_pressed("next_spell"):
 		var n := available_spells().size()

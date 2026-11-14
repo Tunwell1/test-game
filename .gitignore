@@ -1,3 +1,9 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+
+# Временные скриншоты-пробы: в репозиторий идут только финальные кадры
+docs/shots/tmp/
+
+# Логи запуска движка, если он складывает user data рядом с проектом
+Godot/app_userdata/
