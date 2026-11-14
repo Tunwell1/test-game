@@ -44,22 +44,30 @@ func _apply_wall_materials(mesh_instance: MeshInstance3D) -> void:
 		if source is BaseMaterial3D:
 			original_color = (source as BaseMaterial3D).albedo_color
 
-		if material_name.begins_with("glass"):
+		if material_name.begins_with("glass") or _is_glass(original_color):
 			material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			material.albedo_color = Color(0.64, 0.79, 0.88, 0.32)
+			material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			material.cull_mode = BaseMaterial3D.CULL_DISABLED
+			material.albedo_color = Color(0.64, 0.79, 0.88, 0.24)
 			material.roughness = 0.16
 		elif _is_wood(original_color):
 			material.albedo_texture = WOOD_ALBEDO
 			material.albedo_color = Color.WHITE
+			material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 			material.roughness = 0.78
 		else:
 			# The FBX files contain very dark flat material factors and no texture
 			# links. Use the project's stone albedo instead of rendering near-black.
 			material.albedo_texture = STONE_ALBEDO
 			material.albedo_color = _stone_tint(original_color)
+			material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 			material.roughness = 0.95
 
 		mesh_instance.set_surface_override_material(surface_index, material)
+
+
+func _is_glass(color: Color) -> bool:
+	return color.r > 0.7 and color.g > 0.75 and color.b > 0.85
 
 
 func _is_wood(color: Color) -> bool:
@@ -68,9 +76,9 @@ func _is_wood(color: Color) -> bool:
 
 func _stone_tint(color: Color) -> Color:
 	return Color(
-		maxf(0.68, _linear_to_srgb(color.r)),
-		maxf(0.70, _linear_to_srgb(color.g)),
-		maxf(0.73, _linear_to_srgb(color.b)),
+		maxf(0.88, _linear_to_srgb(color.r)),
+		maxf(0.90, _linear_to_srgb(color.g)),
+		maxf(0.93, _linear_to_srgb(color.b)),
 		1.0
 	)
 
