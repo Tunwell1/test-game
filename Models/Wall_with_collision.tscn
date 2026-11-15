@@ -1,16 +1,9 @@
 [gd_scene load_steps=3 format=3]
 
 [ext_resource type="PackedScene" path="res://Models/Wall.glb" id="1_model"]
-
-[sub_resource type="BoxShape3D" id="BoxShape3D_wall"]
-size = Vector3(6.8, 6.0, 1.2)
+[ext_resource type="Script" path="res://Models/static_mesh_collision.gd" id="2_collision"]
 
 [node name="Wall" type="StaticBody3D"]
+script = ExtResource("2_collision")
 
 [node name="ImportedModel" parent="." instance=ExtResource("1_model")]
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
-# The imported wall mesh spans x=0..6.8 and z=-1..0.2 in local space.
-# Center the box on that offset mesh so it cannot block the walkable space to its left.
-position = Vector3(3.4, 3, -0.4)
-shape = SubResource("BoxShape3D_wall")

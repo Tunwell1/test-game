@@ -52,6 +52,7 @@ func _ready() -> void:
 	death_screen = _make_layer()
 	death_screen.visible = false
 	death_screen.draw.connect(_draw_death_screen)
+	get_viewport().size_changed.connect(_apply_interface_scale)
 	_apply_interface_scale()
 
 func set_interface_scale(value: float) -> void:
@@ -61,10 +62,16 @@ func set_interface_scale(value: float) -> void:
 func _apply_interface_scale() -> void:
 	if not is_inside_tree():
 		return
-	var viewport_size := get_viewport().get_visible_rect().size
-	var centered_offset := viewport_size * (1.0 - _interface_scale) * 0.5
+	var logical_size := get_viewport().get_visible_rect().size / _interface_scale
+	# Drawing uses the expanded logical viewport so the scaled canvas still reaches
+	# every screen edge instead of magnifying a fixed-size canvas into a crop.
+	for canvas in [hud_canvas, school_screen, death_screen]:
+		if canvas == null:
+			continue
+		canvas.position = Vector2.ZERO
+		canvas.size = logical_size
 	transform = Transform2D(Vector2(_interface_scale, 0.0),
-		Vector2(0.0, _interface_scale), centered_offset)
+		Vector2(0.0, _interface_scale), Vector2.ZERO)
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_SIZE_CHANGED and is_node_ready():
@@ -72,7 +79,7 @@ func _notification(what: int) -> void:
 
 func _make_layer() -> Control:
 	var c := Control.new()
-	c.set_anchors_preset(Control.PRESET_FULL_RECT)
+	c.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(c)
 	return c

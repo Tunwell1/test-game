@@ -62,6 +62,7 @@ func _ready() -> void:
 	layer = 10
 	_load_settings()
 	_build()
+	get_viewport().size_changed.connect(_apply_ui_scale)
 	_apply_saved_settings()
 	_set_paused(false)
 
@@ -120,8 +121,12 @@ func _apply_display_settings() -> void:
 func _apply_ui_scale() -> void:
 	var scale := float(UI_SCALE_VALUES[_saved_ui_scale_index])
 	var viewport_size := get_viewport().get_visible_rect().size
-	var centered_offset := viewport_size * (1.0 - scale) * 0.5
-	transform = Transform2D(Vector2(scale, 0.0), Vector2(0.0, scale), centered_offset)
+	# Lay out the UI in a smaller logical canvas, then scale it to fill the viewport.
+	# This preserves edge anchors and prevents large mode from pushing elements off-screen.
+	if root != null:
+		root.position = Vector2.ZERO
+		root.size = viewport_size / scale
+	transform = Transform2D(Vector2(scale, 0.0), Vector2(0.0, scale), Vector2.ZERO)
 	var hud := get_parent().get_node_or_null("HUD")
 	if hud != null and hud.has_method("set_interface_scale"):
 		hud.call("set_interface_scale", scale)
@@ -197,7 +202,7 @@ func _exit_tree() -> void:
 
 func _build() -> void:
 	root = Control.new()
-	root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	root.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	root.mouse_filter = Control.MOUSE_FILTER_STOP
 	root.draw.connect(_draw_backdrop)
 	add_child(root)
