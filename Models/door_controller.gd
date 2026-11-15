@@ -10,7 +10,8 @@ extends AnimatableBody3D
 var _is_open: bool = false
 var _motion: Tween
 var _door_mesh: MeshInstance3D
-var _outline_mesh: MeshInstance3D
+var _highlight_material: ShaderMaterial
+var _highlight_tween: Tween
 var _initialized: bool = false
 var _closed_rotation: Vector3
 
@@ -74,32 +75,46 @@ func _setup_door() -> void:
 		add_child(collision)
 	collision.shape = shape
 	collision.position = mesh_bounds.position + mesh_bounds.size * 0.5
-	_create_outline()
+	_create_highlight()
 	_initialized = true
 	print("Door initialized from mesh '%s' / '%s'. Press E to toggle." % [_door_mesh.name, _door_mesh.mesh.resource_name])
 
 
-func _create_outline() -> void:
-	# Load at runtime so a shader import/compile issue can never disable door interaction.
-	var outline_shader := load("res://Models/door_outline.gdshader") as Shader
-	if outline_shader == null:
-		push_warning("Door outline shader could not be loaded; interaction remains available.")
+func _create_highlight() -> void:
+	var shader := load("res://Models/door_highlight.gdshader") as Shader
+	if shader == null:
+		push_warning("Door highlight shader could not be loaded; interaction remains available.")
 		return
-	_outline_mesh = MeshInstance3D.new()
-	_outline_mesh.name = "DoorOutline"
-	_outline_mesh.mesh = _door_mesh.mesh
-	_outline_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	var outline_material := ShaderMaterial.new()
-	outline_material.shader = outline_shader
-	outline_material.render_priority = 1
-	_outline_mesh.material_override = outline_material
-	_outline_mesh.visible = false
-	_door_mesh.add_child(_outline_mesh)
+	var bounds: AABB = _door_mesh.mesh.get_aabb()
+	_highlight_material = ShaderMaterial.new()
+	_highlight_material.shader = shader
+	_highlight_material.set_shader_parameter("bounds_min", bounds.position)
+	_highlight_material.set_shader_parameter("bounds_size", bounds.size)
+	_highlight_material.set_shader_parameter("intensity", 0.0)
 
 
 func set_targeted(targeted: bool) -> void:
-	if is_instance_valid(_outline_mesh):
-		_outline_mesh.visible = targeted
+	if _highlight_material == null or not is_instance_valid(_door_mesh):
+		return
+	if _highlight_tween and _highlight_tween.is_valid():
+		_highlight_tween.kill()
+	if targeted:
+		_door_mesh.material_overlay = _highlight_material
+	var from := float(_highlight_material.get_shader_parameter("intensity"))
+	_highlight_tween = create_tween()
+	_highlight_tween.tween_method(_set_highlight_intensity, from,
+		1.0 if targeted else 0.0, 0.18 if targeted else 0.25)
+	if not targeted:
+		_highlight_tween.tween_callback(_clear_highlight)
+
+
+func _set_highlight_intensity(value: float) -> void:
+	_highlight_material.set_shader_parameter("intensity", value)
+
+
+func _clear_highlight() -> void:
+	if is_instance_valid(_door_mesh):
+		_door_mesh.material_overlay = null
 
 
 func interact() -> void:
