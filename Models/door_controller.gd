@@ -1,7 +1,5 @@
 extends AnimatableBody3D
 
-const HIGHLIGHT_ALPHA := 0.14
-
 @export_range(0.0, 180.0, 1.0) var open_angle_degrees: float = 100.0
 @export var open_duration: float = 0.7
 ## Change to 1.0 if the leaf should swing to the opposite side.
@@ -12,7 +10,7 @@ const HIGHLIGHT_ALPHA := 0.14
 var _is_open: bool = false
 var _motion: Tween
 var _door_mesh: MeshInstance3D
-var _highlight_material: StandardMaterial3D
+var _handle_glints: Array[OmniLight3D] = []
 var _highlight_tween: Tween
 var _initialized: bool = false
 var _closed_rotation: Vector3
@@ -77,34 +75,40 @@ func _setup_door() -> void:
 		add_child(collision)
 	collision.shape = shape
 	collision.position = mesh_bounds.position + mesh_bounds.size * 0.5
-	_create_highlight()
+	_create_handle_glints()
 	_initialized = true
 	print("Door initialized from mesh '%s' / '%s'. Press E to toggle." % [_door_mesh.name, _door_mesh.mesh.resource_name])
 
 
-func _create_highlight() -> void:
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	mat.albedo_color = Color(1.0, 0.85, 0.55, 0.0)
-	_highlight_material = mat
+func _create_handle_glints() -> void:
+	# Ручки находятся у правого края створки на обеих сторонах модели.
+	for z_offset in [-0.38, 0.33]:
+		var glint := OmniLight3D.new()
+		glint.name = "HandleGlint"
+		glint.position = Vector3(2.6, 2.0, z_offset)
+		glint.light_color = Color(1.0, 0.72, 0.36)
+		glint.light_energy = 0.0
+		glint.omni_range = 0.3
+		glint.light_specular = 1.4
+		glint.shadow_enabled = false
+		_door_mesh.add_child(glint)
+		_handle_glints.append(glint)
 
 
 func set_targeted(targeted: bool) -> void:
-	if _highlight_material == null or not is_instance_valid(_door_mesh):
+	if _handle_glints.is_empty():
 		return
 	if _highlight_tween and _highlight_tween.is_valid():
 		_highlight_tween.kill()
-	if targeted:
-		_door_mesh.material_overlay = _highlight_material
-	_highlight_tween = create_tween()
-	_highlight_tween.tween_property(_highlight_material, "albedo_color:a",
-		HIGHLIGHT_ALPHA if targeted else 0.0, 0.15)
-	if not targeted:
-		_highlight_tween.tween_callback(func():
-			if is_instance_valid(_door_mesh):
-				_door_mesh.material_overlay = null)
+	_highlight_tween = create_tween().set_parallel(true)
+	var target_energy := 1.4 if targeted else 0.0
+	for glint in _handle_glints:
+		if is_instance_valid(glint):
+			_highlight_tween.tween_property(glint, "light_energy", target_energy, 0.16)
+
+
+func get_interaction_prompt() -> String:
+	return "ЗАКРЫТЬ" if _is_open else "ОТКРЫТЬ"
 
 
 func interact() -> void:

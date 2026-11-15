@@ -210,6 +210,9 @@ func _draw_reticle(caps: Font, s: Vector2) -> void:
 			UiTheme.draw_diamond(hud_canvas, center + d * (11.0 + pulse * 1.6), 1.8, 3.2,
 				UiTheme.fade(UiTheme.GOLD, 0.5 + 0.35 * pulse))
 		var label := "ВЗАИМОДЕЙСТВИЕ"
+		var target := player.interact_ray.get_collider() if player.interact_ray else null
+		if target != null and target.has_method("get_interaction_prompt"):
+			label = str(target.call("get_interaction_prompt"))
 		var w := UiTheme.text_width(caps, label, 8)
 		var text_y := center.y + 40.0
 		UiTheme.draw_text_center(hud_canvas, caps, center.x, text_y, label, 8,
