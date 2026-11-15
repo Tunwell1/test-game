@@ -7,4 +7,4 @@
 script = ExtResource("2_collision")
 
 [node name="ImportedModel" parent="." instance=ExtResource("1_model")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3.1981652, 0, -0.5695173)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -0.5695177)
