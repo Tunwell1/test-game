@@ -67,11 +67,13 @@ func _setup_door() -> void:
 		return
 	var shape := BoxShape3D.new()
 	shape.size = mesh_bounds.size
-	var collision := CollisionShape3D.new()
-	collision.name = "DoorCollision"
+	var collision := get_node_or_null("DoorCollision") as CollisionShape3D
+	if collision == null:
+		collision = CollisionShape3D.new()
+		collision.name = "DoorCollision"
+		add_child(collision)
 	collision.shape = shape
 	collision.position = mesh_bounds.position + mesh_bounds.size * 0.5
-	add_child(collision)
 	_create_outline()
 	_initialized = true
 	print("Door initialized from mesh '%s' / '%s'. Press E to toggle." % [_door_mesh.name, _door_mesh.mesh.resource_name])
