@@ -7,6 +7,8 @@ extends CanvasLayer
 const MARGIN := 110.0
 const SETTINGS_PATH := "user://settings.cfg"
 const RESOLUTIONS := [Vector2i(1280, 720), Vector2i(1600, 900), Vector2i(1920, 1080)]
+const UI_SCALE_VALUES := [0.8, 1.0, 1.25]
+const UI_SCALE_LABELS := ["Мелкий", "Обычный", "Крупный"]
 const WINDOW_MODES := [DisplayServer.WINDOW_MODE_WINDOWED, DisplayServer.WINDOW_MODE_FULLSCREEN,
 	DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN]
 const REBIND_ACTIONS := [
@@ -40,6 +42,7 @@ var sensitivity_slider: HSlider
 var sensitivity_label: Label
 var window_mode_option: OptionButton
 var resolution_option: OptionButton
+var ui_scale_option: OptionButton
 
 var _paused := false
 var _base_sensitivity := 0.0
