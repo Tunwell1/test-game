@@ -70,8 +70,9 @@ func _load_settings() -> void:
 		_saved_sensitivity_percent = float(_settings.get_value("controls", "sensitivity_percent", 100.0))
 		_saved_window_mode = int(_settings.get_value("display", "window_mode", _saved_window_mode))
 		_saved_resolution_index = int(_settings.get_value("display", "resolution_index", _saved_resolution_index))
-		for action in _settings.get_section_keys("bindings"):
-			_saved_bindings[action] = _settings.get_value("bindings", action)
+		if _settings.has_section("bindings"):
+			for action in _settings.get_section_keys("bindings"):
+				_saved_bindings[action] = _settings.get_value("bindings", action)
 	_saved_volume_percent = clampf(_saved_volume_percent, 0.0, 100.0)
 	_saved_sensitivity_percent = clampf(_saved_sensitivity_percent, 25.0, 200.0)
 	_saved_resolution_index = clampi(_saved_resolution_index, 0, RESOLUTIONS.size() - 1)

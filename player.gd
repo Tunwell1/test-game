@@ -380,17 +380,21 @@ func _apply_crouch_transition(delta: float) -> void:
 	head.position.y = lerpf(head.position.y, target_head_y, kh)
 
 func has_interact_target() -> bool:
-	if interact_ray == null or not interact_ray.is_colliding():
+	if interact_ray == null or not interact_ray.enabled:
+		return false
+	# The HUD samples in _process while the ray normally updates in the physics
+	# tick. Force a fresh query so the prompt tracks the current camera aim.
+	interact_ray.force_raycast_update()
+	if not interact_ray.is_colliding():
 		return false
 	var obj := interact_ray.get_collider()
 	return obj != null and obj.has_method("interact")
 
 func _process_interaction() -> void:
-	if Input.is_action_just_pressed("interact"):
-		if interact_ray and interact_ray.is_colliding() and interact_ray.get_collider():
-			var obj = interact_ray.get_collider()
-			if obj and obj.has_method("interact"):
-				obj.call("interact")
+	if Input.is_action_just_pressed("interact") and has_interact_target():
+		var obj := interact_ray.get_collider()
+		if obj != null:
+			obj.call("interact")
 
 func _apply_head_bob(delta: float) -> void:
 	# SpringArm3D сам задаёт позицию камеры, поэтому покачиваем сам CameraBoom

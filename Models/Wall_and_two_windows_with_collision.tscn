@@ -1,0 +1,9 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="PackedScene" path="res://Models/Wall_and_two_windows.glb" id="1_model"]
+[ext_resource type="Script" path="res://Models/static_mesh_collision.gd" id="2_collision"]
+
+[node name="WallAndTwoWindows" type="StaticBody3D"]
+script = ExtResource("2_collision")
+
+[node name="ImportedModel" parent="." instance=ExtResource("1_model")]

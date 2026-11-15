@@ -5,6 +5,9 @@
 [ext_resource type="Script" uid="uid://cwgtp0lhnuofk" path="res://Interactable.gd" id="3_interact"]
 [ext_resource type="Script" uid="uid://cnjr2p75ao1pj" path="res://enemy_health_overlay.gd" id="5_overlay"]
 [ext_resource type="PackedScene" path="res://Models/Wall_with_collision.tscn" id="6_7mycd"]
+[ext_resource type="PackedScene" path="res://Models/Wall_and_two_windows_with_collision.tscn" id="7_two_windows"]
+[ext_resource type="PackedScene" path="res://Models/Wall_door_with_collision.tscn" id="8_door"]
+[ext_resource type="PackedScene" path="res://Models/Wall_and_window_with_collision.tscn" id="9_window"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_1"]
 sky_horizon_color = Color(0.64625, 0.65575, 0.67075, 1)
@@ -131,3 +134,12 @@ script = ExtResource("5_overlay")
 
 [node name="Wall" parent="." unique_id=929803202 instance=ExtResource("6_7mycd")]
 transform = Transform3D(0.6, 0, 0, 0, 0.6, 0, 0, 0, 0.6, -7.3888865, 0, 1.6779308)
+
+[node name="WallAndTwoWindows" parent="." instance=ExtResource("7_two_windows")]
+transform = Transform3D(0.6, 0, 0, 0, 0.6, 0, 0, 0, 0.6, -3.305, 0, 1.6779308)
+
+[node name="WallDoor" parent="." instance=ExtResource("8_door")]
+transform = Transform3D(0.6, 0, 0, 0, 0.6, 0, 0, 0, 0.6, 0.778, 0, 1.6779308)
+
+[node name="WallAndWindow" parent="." instance=ExtResource("9_window")]
+transform = Transform3D(0.6, 0, 0, 0, 0.6, 0, 0, 0, 0.6, 4.862, 0, 1.6779308)
