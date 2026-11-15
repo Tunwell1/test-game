@@ -382,18 +382,14 @@ func _apply_crouch_transition(delta: float) -> void:
 
 func has_interact_target() -> bool:
 	if interact_ray == null or not interact_ray.enabled:
-		_update_interact_target(null)
 		return false
 	# The HUD samples in _process while the ray normally updates in the physics
-	# tick. Force a fresh query so the prompt and door outline follow the aim.
+	# tick. Force a fresh query so the prompt tracks the current camera aim.
 	interact_ray.force_raycast_update()
-	var target: Object = null
-	if interact_ray.is_colliding():
-		var hit := interact_ray.get_collider()
-		if hit != null and hit.has_method("interact"):
-			target = hit
-	_update_interact_target(target)
-	return target != null
+	if not interact_ray.is_colliding():
+		return false
+	var obj := interact_ray.get_collider()
+	return obj != null and obj.has_method("interact")
 
 func _update_interact_target(target: Object) -> void:
 	if target == _interact_target:
@@ -405,10 +401,16 @@ func _update_interact_target(target: Object) -> void:
 		_interact_target.call("set_targeted", true)
 
 func _process_interaction() -> void:
-	if Input.is_action_just_pressed("interact") and has_interact_target():
-		var obj := interact_ray.get_collider()
-		if obj != null:
-			obj.call("interact")
+	var target: Object = null
+	if interact_ray != null and interact_ray.enabled:
+		interact_ray.force_raycast_update()
+		if interact_ray.is_colliding():
+			var hit := interact_ray.get_collider()
+			if hit != null and hit.has_method("interact"):
+				target = hit
+	_update_interact_target(target)
+	if Input.is_action_just_pressed("interact") and target != null:
+		target.call("interact")
 
 func _apply_head_bob(delta: float) -> void:
 	# SpringArm3D сам задаёт позицию камеры, поэтому покачиваем сам CameraBoom

@@ -1,7 +1,5 @@
 extends AnimatableBody3D
 
-const OUTLINE_SHADER: Shader = preload("res://Models/door_outline.gdshader")
-
 @export_range(0.0, 180.0, 1.0) var open_angle_degrees: float = 100.0
 @export var open_duration: float = 0.7
 ## Change to 1.0 if the leaf should swing to the opposite side.
@@ -80,12 +78,17 @@ func _setup_door() -> void:
 
 
 func _create_outline() -> void:
+	# Load at runtime so a shader import/compile issue can never disable door interaction.
+	var outline_shader := load("res://Models/door_outline.gdshader") as Shader
+	if outline_shader == null:
+		push_warning("Door outline shader could not be loaded; interaction remains available.")
+		return
 	_outline_mesh = MeshInstance3D.new()
 	_outline_mesh.name = "DoorOutline"
 	_outline_mesh.mesh = _door_mesh.mesh
 	_outline_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	var outline_material := ShaderMaterial.new()
-	outline_material.shader = OUTLINE_SHADER
+	outline_material.shader = outline_shader
 	outline_material.render_priority = 1
 	_outline_mesh.material_override = outline_material
 	_outline_mesh.visible = false
