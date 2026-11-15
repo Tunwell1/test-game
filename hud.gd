@@ -31,6 +31,7 @@ var _time := 0.0
 var _school_t := 0.0
 var _death_t := 0.0
 var _school_pause_active := false
+var _interface_scale := 1.0
 
 var _scrim: GradientTexture2D
 var _grad_cache: Dictionary = {}
@@ -51,6 +52,23 @@ func _ready() -> void:
 	death_screen = _make_layer()
 	death_screen.visible = false
 	death_screen.draw.connect(_draw_death_screen)
+	_apply_interface_scale()
+
+func set_interface_scale(value: float) -> void:
+	_interface_scale = clampf(value, 0.5, 2.0)
+	_apply_interface_scale()
+
+func _apply_interface_scale() -> void:
+	if not is_inside_tree():
+		return
+	var viewport_size := get_viewport().get_visible_rect().size
+	var centered_offset := viewport_size * (1.0 - _interface_scale) * 0.5
+	transform = Transform2D(Vector2(_interface_scale, 0.0),
+		Vector2(0.0, _interface_scale), centered_offset)
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_SIZE_CHANGED and is_node_ready():
+		_apply_interface_scale()
 
 func _make_layer() -> Control:
 	var c := Control.new()

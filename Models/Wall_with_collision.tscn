@@ -10,5 +10,7 @@ size = Vector3(6.8, 6.0, 1.2)
 [node name="ImportedModel" parent="." instance=ExtResource("1_model")]
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="."]
-position = Vector3(0, 3, -0.05)
+# The imported wall mesh spans x=0..6.8 and z=-1..0.2 in local space.
+# Center the box on that offset mesh so it cannot block the walkable space to its left.
+position = Vector3(3.4, 3, -0.4)
 shape = SubResource("BoxShape3D_wall")

@@ -54,6 +54,7 @@ var _saved_volume_percent: float = 100.0
 var _saved_sensitivity_percent: float = 100.0
 var _saved_window_mode: int = DisplayServer.WINDOW_MODE_WINDOWED
 var _saved_resolution_index: int = 0
+var _saved_ui_scale_index: int = 1
 var _saved_bindings: Dictionary = {}
 
 func _ready() -> void:
@@ -73,18 +74,23 @@ func _load_settings() -> void:
 		_saved_sensitivity_percent = float(_settings.get_value("controls", "sensitivity_percent", 100.0))
 		_saved_window_mode = int(_settings.get_value("display", "window_mode", _saved_window_mode))
 		_saved_resolution_index = int(_settings.get_value("display", "resolution_index", _saved_resolution_index))
+		_saved_ui_scale_index = int(_settings.get_value("display", "ui_scale_index", _saved_ui_scale_index))
 		if _settings.has_section("bindings"):
 			for action in _settings.get_section_keys("bindings"):
 				_saved_bindings[action] = _settings.get_value("bindings", action)
 	_saved_volume_percent = clampf(_saved_volume_percent, 0.0, 100.0)
 	_saved_sensitivity_percent = clampf(_saved_sensitivity_percent, 25.0, 200.0)
 	_saved_resolution_index = clampi(_saved_resolution_index, 0, RESOLUTIONS.size() - 1)
+	_saved_ui_scale_index = clampi(_saved_ui_scale_index, 0, UI_SCALE_VALUES.size() - 1)
 	if not WINDOW_MODES.has(_saved_window_mode):
 		_saved_window_mode = DisplayServer.WINDOW_MODE_WINDOWED
 
 func _apply_saved_settings() -> void:
 	_apply_volume(_saved_volume_percent)
 	_apply_display_settings()
+	_apply_ui_scale()
+	if ui_scale_option:
+		ui_scale_option.select(_saved_ui_scale_index)
 	if volume_label:
 		volume_label.text = "%d%%" % int(round(_saved_volume_percent))
 	if volume_slider:
@@ -111,11 +117,25 @@ func _apply_display_settings() -> void:
 	DisplayServer.window_set_size(RESOLUTIONS[_saved_resolution_index])
 	DisplayServer.window_set_mode(_saved_window_mode)
 
+func _apply_ui_scale() -> void:
+	var scale := float(UI_SCALE_VALUES[_saved_ui_scale_index])
+	var viewport_size := get_viewport().get_visible_rect().size
+	var centered_offset := viewport_size * (1.0 - scale) * 0.5
+	transform = Transform2D(Vector2(scale, 0.0), Vector2(0.0, scale), centered_offset)
+	var hud := get_parent().get_node_or_null("HUD")
+	if hud != null and hud.has_method("set_interface_scale"):
+		hud.call("set_interface_scale", scale)
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_SIZE_CHANGED and is_node_ready():
+		_apply_ui_scale()
+
 func _save_settings() -> void:
 	_settings.set_value("audio", "volume_percent", _saved_volume_percent)
 	_settings.set_value("controls", "sensitivity_percent", _saved_sensitivity_percent)
 	_settings.set_value("display", "window_mode", _saved_window_mode)
 	_settings.set_value("display", "resolution_index", _saved_resolution_index)
+	_settings.set_value("display", "ui_scale_index", _saved_ui_scale_index)
 	for action in _saved_bindings:
 		_settings.set_value("bindings", action, _saved_bindings[action])
 	_settings.save(SETTINGS_PATH)
@@ -366,6 +386,20 @@ func _build_settings() -> void:
 	window_mode_option.item_selected.connect(_on_window_mode_selected)
 	mode_row.add_child(window_mode_option)
 
+	var ui_scale_row := HBoxContainer.new()
+	ui_scale_row.add_theme_constant_override("separation", 12)
+	settings_group.add_child(ui_scale_row)
+	var ui_scale_label := _label("РАЗМЕР ИНТЕРФЕЙСА", 9, UiTheme.fade(UiTheme.MUTED, 0.95), true)
+	ui_scale_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ui_scale_row.add_child(ui_scale_label)
+	ui_scale_option = OptionButton.new()
+	ui_scale_option.custom_minimum_size.x = 180.0
+	for i in UI_SCALE_LABELS.size():
+		ui_scale_option.add_item(UI_SCALE_LABELS[i], i)
+	ui_scale_option.select(_saved_ui_scale_index)
+	ui_scale_option.item_selected.connect(_on_ui_scale_selected)
+	ui_scale_row.add_child(ui_scale_option)
+
 	settings_group.add_child(_spacer(4))
 	var sens_row := HBoxContainer.new()
 	sens_row.add_theme_constant_override("separation", 12)
@@ -589,6 +623,11 @@ func _on_resolution_selected(index: int) -> void:
 	_saved_resolution_index = clampi(index, 0, RESOLUTIONS.size() - 1)
 	if _saved_window_mode == DisplayServer.WINDOW_MODE_WINDOWED:
 		DisplayServer.window_set_size(RESOLUTIONS[_saved_resolution_index])
+	_save_settings()
+
+func _on_ui_scale_selected(index: int) -> void:
+	_saved_ui_scale_index = clampi(index, 0, UI_SCALE_VALUES.size() - 1)
+	_apply_ui_scale()
 	_save_settings()
 
 func _on_window_mode_selected(index: int) -> void:
