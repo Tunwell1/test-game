@@ -1,5 +1,7 @@
 extends AnimatableBody3D
 
+const HIGHLIGHT_ALPHA := 0.14
+
 @export_range(0.0, 180.0, 1.0) var open_angle_degrees: float = 100.0
 @export var open_duration: float = 0.7
 ## Change to 1.0 if the leaf should swing to the opposite side.
@@ -10,7 +12,7 @@ extends AnimatableBody3D
 var _is_open: bool = false
 var _motion: Tween
 var _door_mesh: MeshInstance3D
-var _highlight_material: ShaderMaterial
+var _highlight_material: StandardMaterial3D
 var _highlight_tween: Tween
 var _initialized: bool = false
 var _closed_rotation: Vector3
@@ -81,16 +83,12 @@ func _setup_door() -> void:
 
 
 func _create_highlight() -> void:
-	var shader := load("res://Models/door_highlight.gdshader") as Shader
-	if shader == null:
-		push_warning("Door highlight shader could not be loaded; interaction remains available.")
-		return
-	var bounds: AABB = _door_mesh.mesh.get_aabb()
-	_highlight_material = ShaderMaterial.new()
-	_highlight_material.shader = shader
-	_highlight_material.set_shader_parameter("bounds_min", bounds.position)
-	_highlight_material.set_shader_parameter("bounds_size", bounds.size)
-	_highlight_material.set_shader_parameter("intensity", 0.0)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.albedo_color = Color(1.0, 0.85, 0.55, 0.0)
+	_highlight_material = mat
 
 
 func set_targeted(targeted: bool) -> void:
@@ -100,21 +98,13 @@ func set_targeted(targeted: bool) -> void:
 		_highlight_tween.kill()
 	if targeted:
 		_door_mesh.material_overlay = _highlight_material
-	var from := float(_highlight_material.get_shader_parameter("intensity"))
 	_highlight_tween = create_tween()
-	_highlight_tween.tween_method(_set_highlight_intensity, from,
-		1.0 if targeted else 0.0, 0.18 if targeted else 0.25)
+	_highlight_tween.tween_property(_highlight_material, "albedo_color:a",
+		HIGHLIGHT_ALPHA if targeted else 0.0, 0.15)
 	if not targeted:
-		_highlight_tween.tween_callback(_clear_highlight)
-
-
-func _set_highlight_intensity(value: float) -> void:
-	_highlight_material.set_shader_parameter("intensity", value)
-
-
-func _clear_highlight() -> void:
-	if is_instance_valid(_door_mesh):
-		_door_mesh.material_overlay = null
+		_highlight_tween.tween_callback(func():
+			if is_instance_valid(_door_mesh):
+				_door_mesh.material_overlay = null)
 
 
 func interact() -> void:
