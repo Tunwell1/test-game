@@ -1,23 +1,22 @@
 shader_type spatial;
 render_mode unshaded, blend_add, depth_draw_never, cull_back, fog_disabled;
 
-uniform vec4 glow_color : source_color = vec4(1.0, 0.72, 0.25, 1.0);
-uniform vec4 core_color : source_color = vec4(1.0, 0.93, 0.70, 1.0);
+uniform vec4 line_color : source_color = vec4(1.0, 0.80, 0.42, 1.0);
 uniform float intensity : hint_range(0.0, 1.0) = 0.0;
 
 uniform vec3 bounds_min = vec3(0.0);
 uniform vec3 bounds_size = vec3(1.0);
 
-uniform float border_width = 0.07;
-uniform float border_strength = 2.4;
-uniform float fill_strength = 0.08;
-uniform float fresnel_power = 2.0;
-uniform float fresnel_strength = 1.6;
-uniform float sweep_speed = 0.5;
-uniform float sweep_width = 0.09;
-uniform float sweep_strength = 1.1;
-uniform float pulse_speed = 2.6;
-uniform float pulse_amount = 0.2;
+// Все размеры в локальных единицах меша (на сцене он масштабирован на 0.6).
+uniform float inset = 0.12;
+uniform float line_width = 0.03;
+uniform float arm_length = 0.55;
+uniform float diamond_size = 0.07;
+uniform float glow_width = 0.45;
+// Значения > 1.0 дают свечение через Environment glow.
+uniform float line_energy = 3.0;
+uniform float glow_energy = 0.30;
+uniform float breathe_amount = 0.12;
 
 varying vec3 local_pos;
 
@@ -26,24 +25,32 @@ void vertex() {
 }
 
 void fragment() {
-	vec3 uvw = (local_pos - bounds_min) / max(bounds_size, vec3(0.0001));
+	float t = smoothstep(0.0, 1.0, intensity);
 
-	vec2 d = min(uvw.xy, 1.0 - uvw.xy) * bounds_size.xy;
-	float edge_dist = min(d.x, d.y);
-	float border = pow(1.0 - smoothstep(0.0, border_width, edge_dist), 1.5);
+	// Координаты на створке (плоскость XY), в локальных единицах.
+	vec2 p = local_pos.xy - bounds_min.xy;
+	vec2 dist_edge = min(p, bounds_size.xy - p);
+	vec2 q = dist_edge - vec2(inset);
+	float aa = max(length(fwidth(p)), 0.0001);
 
-	float diag = uvw.x * 0.6 + uvw.y * 0.4;
-	float pos = fract(TIME * sweep_speed) * (1.0 + sweep_width * 4.0) - sweep_width * 2.0;
-	float sweep = exp(-pow((diag - pos) / sweep_width, 2.0));
+	float arm = arm_length * t;
 
-	float scan = 0.75 + 0.25 * sin(uvw.y * bounds_size.y * 45.0 - TIME * 2.5);
+	// Вертикальные и горизонтальные плечи скобок у каждого угла.
+	float vx = 1.0 - smoothstep(line_width - aa, line_width + aa, abs(q.x));
+	float vy = 1.0 - smoothstep(line_width - aa, line_width + aa, abs(q.y));
+	float cap_x = smoothstep(-aa, aa, q.x) * (1.0 - smoothstep(arm - aa, arm + aa, q.x));
+	float cap_y = smoothstep(-aa, aa, q.y) * (1.0 - smoothstep(arm - aa, arm + aa, q.y));
+	float bracket = max(vx * cap_y, vy * cap_x);
 
-	float fres = pow(1.0 - clamp(dot(normalize(NORMAL), normalize(VIEW)), 0.0, 1.0), fresnel_power);
+	// Ромбик в вершине угла, как в HUD.
+	float dia = 1.0 - smoothstep(diamond_size - aa, diamond_size + aa, abs(q.x) + abs(q.y));
 
-	float pulse = 1.0 + sin(TIME * pulse_speed) * pulse_amount;
+	// Очень мягкое свечение у краёв створки.
+	float edge = min(dist_edge.x, dist_edge.y);
+	float glow = exp(-edge / glow_width);
 
-	vec3 col = glow_color.rgb * (fill_strength * scan + fres * fresnel_strength + border * border_strength) * pulse;
-	col += core_color.rgb * (sweep * sweep_strength * (0.35 + border) + border * 0.5);
+	float breathe = 1.0 + sin(TIME * 2.0) * breathe_amount;
 
-	ALBEDO = col * intensity;
+	vec3 col = line_color.rgb * ((bracket + dia) * line_energy + glow * glow_energy);
+	ALBEDO = col * breathe * t;
 }
