@@ -8,14 +8,12 @@
 size = Vector3(2.8, 4.8, 0.4)
 
 [node name="WallDoor" type="StaticBody3D"]
-# Physical wall only; it is deliberately not on the player's interact-ray layer.
 collision_layer = 1
 script = ExtResource("2_collision")
 
 [node name="ImportedModel" parent="." instance=ExtResource("1_model")]
 
 [node name="Door" type="AnimatableBody3D" parent="."]
-# Dedicated layer 3: the interaction ray can target the leaf, not the wall.
 collision_layer = 4
 script = ExtResource("3_door")
 

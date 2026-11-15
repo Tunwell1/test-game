@@ -34,7 +34,6 @@ current = true
 fov = 75.0
 
 [node name="InteractRay" type="RayCast3D" parent="Head/CameraBoom/Camera3D"]
-# The interaction ray only sees layer 3 so the decorative wall meshes do not block prompts.
 collision_mask = 4
 target_position = Vector3(0, 0, -4.5)
 enabled = true

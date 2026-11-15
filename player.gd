@@ -155,6 +155,8 @@ func _ready() -> void:
 		camera_boom.add_excluded_object(get_rid())
 	if interact_ray:
 		interact_ray.add_exception(self)
+		interact_ray.collision_mask = 4 # Layer 3: interactable
+		interact_ray.collide_with_bodies = true
 
 	# Прилипание к поверхности при спуске по ступенькам и небольшим уклонам
 	floor_snap_length = 0.35
