@@ -25,6 +25,9 @@ const MODULES := {
 	"door": "res://Models/Wall_door_with_collision.tscn",
 }
 ## Порядок модулей. Ключи — из MODULES, длина любая.
+## "corner" можно ставить только в стык, а не посреди пролёта: у него своя
+## внутренняя геометрия на 1.2 м в обе стороны. Собирать поворот удобнее
+## отдельным WallCorner между двумя WallRun (см. docs/notes/wall-building.md).
 const PATTERN := ["door", "window", "wall", "two_windows", "wall"]
 
 

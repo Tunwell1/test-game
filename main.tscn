@@ -9,6 +9,7 @@
 [ext_resource type="PackedScene" path="res://Models/Wall_and_two_windows_with_collision.tscn" id="7_two_windows"]
 [ext_resource type="PackedScene" path="res://Models/Wall_door_with_collision.tscn" id="8_door"]
 [ext_resource type="PackedScene" path="res://Models/Wall_and_window_with_collision.tscn" id="9_window"]
+[ext_resource type="PackedScene" path="res://Models/Wall_corner_with_collision.tscn" id="10_corner"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_1"]
 sky_horizon_color = Color(0.64625, 0.65575, 0.67075, 1)
@@ -153,3 +154,6 @@ script = ExtResource("6_kek77")
 [node name="wall_04" type="StaticBody3D" parent="WallRun" unique_id=817183101 instance=ExtResource("6_7mycd")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 25.6, 0, 0)
 script = ExtResource("6_kek77")
+
+[node name="WallCorner" parent="." unique_id=1128834501 instance=ExtResource("10_corner")]
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 32, 0, 0)
