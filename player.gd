@@ -108,6 +108,7 @@ var land_vel: float = 0.0
 var land_pitch: float = 0.0
 var bob_y: float = 0.0
 var fall_speed: float = 0.0
+var _interact_target: Object = null
 var sprint_blend: float = 0.0
 var current_speed_limit: float = 4.5
 @export_group("Ощущение камеры")
@@ -381,14 +382,27 @@ func _apply_crouch_transition(delta: float) -> void:
 
 func has_interact_target() -> bool:
 	if interact_ray == null or not interact_ray.enabled:
+		_update_interact_target(null)
 		return false
 	# The HUD samples in _process while the ray normally updates in the physics
-	# tick. Force a fresh query so the prompt tracks the current camera aim.
+	# tick. Force a fresh query so the prompt and door outline follow the aim.
 	interact_ray.force_raycast_update()
-	if not interact_ray.is_colliding():
-		return false
-	var obj := interact_ray.get_collider()
-	return obj != null and obj.has_method("interact")
+	var target: Object = null
+	if interact_ray.is_colliding():
+		var hit := interact_ray.get_collider()
+		if hit != null and hit.has_method("interact"):
+			target = hit
+	_update_interact_target(target)
+	return target != null
+
+func _update_interact_target(target: Object) -> void:
+	if target == _interact_target:
+		return
+	if is_instance_valid(_interact_target) and _interact_target.has_method("set_targeted"):
+		_interact_target.call("set_targeted", false)
+	_interact_target = target
+	if is_instance_valid(_interact_target) and _interact_target.has_method("set_targeted"):
+		_interact_target.call("set_targeted", true)
 
 func _process_interaction() -> void:
 	if Input.is_action_just_pressed("interact") and has_interact_target():
