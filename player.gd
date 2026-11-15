@@ -108,6 +108,7 @@ var land_vel: float = 0.0
 var land_pitch: float = 0.0
 var bob_y: float = 0.0
 var fall_speed: float = 0.0
+var _interact_target: Object = null
 var sprint_blend: float = 0.0
 var current_speed_limit: float = 4.5
 @export_group("Ощущение камеры")
@@ -154,6 +155,8 @@ func _ready() -> void:
 		camera_boom.add_excluded_object(get_rid())
 	if interact_ray:
 		interact_ray.add_exception(self)
+		interact_ray.collision_mask = 4 # Layer 3: interactable
+		interact_ray.collide_with_bodies = true
 
 	# Прилипание к поверхности при спуске по ступенькам и небольшим уклонам
 	floor_snap_length = 0.35
@@ -231,10 +234,12 @@ func take_damage(amount: float) -> void:
 		died.emit()
 
 func heal(amount: float) -> void:
-	if is_dead:
+	if is_dead or amount <= 0.0 or health >= health_max:
 		return
-	health = minf(health + amount, health_max)
-	health_changed.emit(health, health_max)
+	var previous_health := health
+	health = clampf(health + amount, 0.0, health_max)
+	if not is_equal_approx(health, previous_health):
+		health_changed.emit(health, health_max)
 
 ## Простое возрождение: перезапуск текущей сцены.
 func respawn() -> void:
@@ -378,17 +383,36 @@ func _apply_crouch_transition(delta: float) -> void:
 	head.position.y = lerpf(head.position.y, target_head_y, kh)
 
 func has_interact_target() -> bool:
-	if interact_ray == null or not interact_ray.is_colliding():
+	if interact_ray == null or not interact_ray.enabled:
+		return false
+	# The HUD samples in _process while the ray normally updates in the physics
+	# tick. Force a fresh query so the prompt tracks the current camera aim.
+	interact_ray.force_raycast_update()
+	if not interact_ray.is_colliding():
 		return false
 	var obj := interact_ray.get_collider()
 	return obj != null and obj.has_method("interact")
 
+func _update_interact_target(target: Object) -> void:
+	if target == _interact_target:
+		return
+	if is_instance_valid(_interact_target) and _interact_target.has_method("set_targeted"):
+		_interact_target.call("set_targeted", false)
+	_interact_target = target
+	if is_instance_valid(_interact_target) and _interact_target.has_method("set_targeted"):
+		_interact_target.call("set_targeted", true)
+
 func _process_interaction() -> void:
-	if Input.is_action_just_pressed("interact"):
-		if interact_ray and interact_ray.is_colliding() and interact_ray.get_collider():
-			var obj = interact_ray.get_collider()
-			if obj and obj.has_method("interact"):
-				obj.call("interact")
+	var target: Object = null
+	if interact_ray != null and interact_ray.enabled:
+		interact_ray.force_raycast_update()
+		if interact_ray.is_colliding():
+			var hit := interact_ray.get_collider()
+			if hit != null and hit.has_method("interact"):
+				target = hit
+	_update_interact_target(target)
+	if Input.is_action_just_pressed("interact") and target != null:
+		target.call("interact")
 
 func _apply_head_bob(delta: float) -> void:
 	# SpringArm3D сам задаёт позицию камеры, поэтому покачиваем сам CameraBoom
@@ -569,6 +593,38 @@ func _setup_input_actions() -> void:
 			var ev := InputEventKey.new()
 			ev.physical_keycode = default_keys[action]
 			InputMap.action_add_event(action, ev)
+
+	var joypad_events := {
+		"move_left": _joy_axis_event(JOY_AXIS_LEFT_X, -1.0),
+		"move_right": _joy_axis_event(JOY_AXIS_LEFT_X, 1.0),
+		"move_forward": _joy_axis_event(JOY_AXIS_LEFT_Y, -1.0),
+		"move_back": _joy_axis_event(JOY_AXIS_LEFT_Y, 1.0),
+		"jump": _joy_button_event(JOY_BUTTON_A),
+		"sprint": _joy_button_event(JOY_BUTTON_LEFT_STICK),
+		"crouch": _joy_button_event(JOY_BUTTON_B),
+		"interact": _joy_button_event(JOY_BUTTON_X),
+	}
+	for action in joypad_events:
+		_add_joypad_event_if_missing(action, joypad_events[action])
+
+func _joy_axis_event(axis: int, value: float) -> InputEventJoypadMotion:
+	var event := InputEventJoypadMotion.new()
+	event.axis = axis
+	event.axis_value = value
+	return event
+
+func _joy_button_event(button: int) -> InputEventJoypadButton:
+	var event := InputEventJoypadButton.new()
+	event.button_index = button
+	return event
+
+func _add_joypad_event_if_missing(action: String, event: InputEvent) -> void:
+	if not InputMap.has_action(action):
+		InputMap.add_action(action)
+	for existing in InputMap.action_get_events(action):
+		if existing is InputEventJoypadButton or existing is InputEventJoypadMotion:
+			return
+	InputMap.action_add_event(action, event)
 
 # Генерация короткого звука шага (белый шум с затуханием)
 func _generate_footstep_wav(tone_hz: float = 300.0, duration: float = 0.08, decay: float = 50.0, noise_amount: float = 0.5, smooth: float = 0.0) -> AudioStreamWAV:

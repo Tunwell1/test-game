@@ -31,6 +31,7 @@ var _time := 0.0
 var _school_t := 0.0
 var _death_t := 0.0
 var _school_pause_active := false
+var _interface_scale := 1.0
 
 var _scrim: GradientTexture2D
 var _grad_cache: Dictionary = {}
@@ -51,10 +52,34 @@ func _ready() -> void:
 	death_screen = _make_layer()
 	death_screen.visible = false
 	death_screen.draw.connect(_draw_death_screen)
+	get_viewport().size_changed.connect(_apply_interface_scale)
+	_apply_interface_scale()
+
+func set_interface_scale(value: float) -> void:
+	_interface_scale = clampf(value, 0.5, 2.0)
+	_apply_interface_scale()
+
+func _apply_interface_scale() -> void:
+	if not is_inside_tree():
+		return
+	var logical_size := get_viewport().get_visible_rect().size / _interface_scale
+	# Drawing uses the expanded logical viewport so the scaled canvas still reaches
+	# every screen edge instead of magnifying a fixed-size canvas into a crop.
+	for canvas in [hud_canvas, school_screen, death_screen]:
+		if canvas == null:
+			continue
+		canvas.position = Vector2.ZERO
+		canvas.size = logical_size
+	transform = Transform2D(Vector2(_interface_scale, 0.0),
+		Vector2(0.0, _interface_scale), Vector2.ZERO)
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_SIZE_CHANGED and is_node_ready():
+		_apply_interface_scale()
 
 func _make_layer() -> Control:
 	var c := Control.new()
-	c.set_anchors_preset(Control.PRESET_FULL_RECT)
+	c.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(c)
 	return c
@@ -185,6 +210,9 @@ func _draw_reticle(caps: Font, s: Vector2) -> void:
 			UiTheme.draw_diamond(hud_canvas, center + d * (11.0 + pulse * 1.6), 1.8, 3.2,
 				UiTheme.fade(UiTheme.GOLD, 0.5 + 0.35 * pulse))
 		var label := "ВЗАИМОДЕЙСТВИЕ"
+		var target := player.interact_ray.get_collider() if player.interact_ray else null
+		if target != null and target.has_method("get_interaction_prompt"):
+			label = str(target.call("get_interaction_prompt"))
 		var w := UiTheme.text_width(caps, label, 8)
 		var text_y := center.y + 40.0
 		UiTheme.draw_text_center(hud_canvas, caps, center.x, text_y, label, 8,

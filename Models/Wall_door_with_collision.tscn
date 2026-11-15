@@ -1,0 +1,22 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="PackedScene" path="res://Models/Wall_door.glb" id="1_model"]
+[ext_resource type="Script" path="res://Models/static_mesh_collision.gd" id="2_collision"]
+[ext_resource type="Script" path="res://Models/door_controller.gd" id="3_door"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_door_fallback"]
+size = Vector3(2.8, 4.8, 0.4)
+
+[node name="WallDoor" type="StaticBody3D"]
+collision_layer = 1
+script = ExtResource("2_collision")
+
+[node name="ImportedModel" parent="." instance=ExtResource("1_model")]
+
+[node name="Door" type="AnimatableBody3D" parent="."]
+collision_layer = 4
+script = ExtResource("3_door")
+
+[node name="DoorCollision" type="CollisionShape3D" parent="Door"]
+position = Vector3(1.4, 2.4, 0)
+shape = SubResource("BoxShape3D_door_fallback")

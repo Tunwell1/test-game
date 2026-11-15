@@ -35,7 +35,7 @@ fov = 75.0
 
 [node name="InteractRay" type="RayCast3D" parent="Head/CameraBoom/Camera3D"]
 collision_mask = 4
-target_position = Vector3(0, 0, -2)
+target_position = Vector3(0, 0, -4.5)
 enabled = true
 
 [node name="CeilingCheck" type="ShapeCast3D" parent="."]
