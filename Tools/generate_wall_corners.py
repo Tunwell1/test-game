@@ -1,42 +1,88 @@
 #!/usr/bin/env python3
-"""Build the 6.4 x 6.4 m modular Corner_Wall.glb from Models/Wall.glb.
+"""Build a 90-degree rounded corner wall from Models/Wall.glb.
 
-Uses only the Python standard library — run from the repository root:
-    python3 Tools/generate_wall_corners.py
+Uses only the Python standard library. Run from the repository root:
 
-The generator bends Wall.glb onto a 90-degree outer corner arc of nominal radius
-6.4 m centered at (0, y, -6.4) while:
-  - shifting Z by -0.55414675 m so the entrance seam at x = 0 aligns with the
-    modular wall plane (z in [-1.0, +0.2]) without needing a wrapper transform;
-  - keeping both end half-posts at their exact 0.20 m width so corner-to-wall
-    V-posts match straight wall joints;
-  - slicing only horizontally along X (32 steps on curved timber/ledges, 12 steps
-    on masonry, rigid un-stretched pebbles on the plinth) instead of uniform 3D
-    subdivision, keeping the model lightweight (~7k triangles, <1 MB).
+    python3 Tools/generate_wall_corners.py [radius] [output.glb]
+
+The corner is a quarter annulus of radius RADIUS measured on the wall's z = 0
+plane (outer radius RADIUS + 0.2, inner radius RADIUS - 1.0). Its entrance seam
+is x = 0 / z in [-1.0, +0.2] and its exit seam is z = -RADIUS / x in
+[RADIUS - 1.0, RADIUS + 0.2], so it joins ordinary 6.4 m modules without gaps.
+
+Masonry is NOT stretched: source x maps 1:1 onto arc length
+(theta = (x - post) / RADIUS). The default radius is chosen so that a quarter
+arc is exactly as long as one straight wall module (R * pi/2 = MODULE_LENGTH),
+so the whole Wall.glb is used with no clipping, no stretching and no repeats.
+Both 0.20 m end posts are kept, so the V-posts still line up with straight wall
+joints. A larger radius would need the source wall repeated along the arc.
+
+Footprint is (RADIUS + 0.2) x (RADIUS + 0.2) m, height 6 m. Default
+RADIUS = 4.0743 gives a 4.2743 x 4.2743 m corner with a 6.4 m neutral arc
+(outer edge ~6.71 m), instead of the old stretched ~10.4 m arc at R = 6.4.
 """
 import json
 import math
 from pathlib import Path
 import struct
+import sys
 
 SOURCE = Path("Models/Wall.glb")
 TARGET = Path("Models/Corner_Wall.glb")
 
-RADIUS = 6.4
 HALF_PI = math.pi / 2.0
 # Aligns Wall.glb's raw Z [-0.44589..+0.75415] to modular Z [-1.0000..+0.2000].
 Z_SHIFT = -0.55414675
 
-X_MIN = -0.007502
+POST = 0.20
 X_POST_L = 0.2014
 X_POST_R = 6.2014
 X_MAX = 6.402498
-THETA_POST = 0.20 / RADIUS
+PEBBLE_SOURCE_CENTER_X = 1.2017
 
 SMOOTH_STEPS = 32
 STONE_STEPS = 12
-PEBBLE_COUNT = 5
-PEBBLE_SOURCE_CENTER_X = 1.2017
+PEBBLE_COUNT = 3
+
+MODULE_LENGTH = 6.4
+# A 90-degree arc has length R * pi/2. Matching one straight wall module uses
+# 100% of Wall.glb with no clipping, stretching or repetition. Round DOWN to
+# four decimals: the end-post guard below needs x_body_end < X_POST_R.
+DEFAULT_RADIUS = math.floor((2.0 * MODULE_LENGTH / math.pi) * 10000) / 10000
+
+
+class CornerSpec:
+    """Path geometry for a quarter-circle corner with un-stretched masonry."""
+
+    def __init__(self, radius: float):
+        if radius <= 1.0 or radius >= 6.4:
+            raise ValueError("radius must stay in (1.0, 6.4) metres")
+        self.radius = radius
+        self.theta_post = POST / radius
+        self.body_len = radius * (HALF_PI - 2.0 * self.theta_post)
+        self.x_body_end = X_POST_L + self.body_len
+        if self.x_body_end >= X_POST_R:
+            raise ValueError(
+                "radius leaves no room for the source wall's end post; "
+                "max stretch-free radius from one wall is "
+                f"{2.0 * MODULE_LENGTH / math.pi:.4f} m"
+            )
+
+    def theta(self, x: float) -> float:
+        if x <= 0.0015:
+            return 0.0
+        if x <= X_POST_L:
+            return (x - 0.0015) / (X_POST_L - 0.0015) * self.theta_post
+        if x <= self.x_body_end:
+            return self.theta_post + (x - X_POST_L) / self.radius
+        if x >= X_MAX:
+            return HALF_PI
+        return (HALF_PI - self.theta_post) + (x - X_POST_R) / (X_MAX - X_POST_R) * self.theta_post
+
+    def point(self, x: float, y: float, z: float):
+        theta = self.theta(x)
+        r = self.radius + z
+        return (r * math.sin(theta), y, -self.radius + r * math.cos(theta))
 
 
 def load_glb(path: Path):
@@ -70,24 +116,6 @@ def read_accessor(doc, blob: bytes, idx: int):
     return [struct.unpack_from(fmt, blob, base + i * stride) for i in range(acc["count"])]
 
 
-def x_to_theta(x: float) -> float:
-    if x <= 0.0015:
-        return 0.0
-    if x >= 6.4000:
-        return HALF_PI
-    if x <= X_POST_L:
-        return (x - 0.0015) / (X_POST_L - 0.0015) * THETA_POST
-    if x >= X_POST_R:
-        return (HALF_PI - THETA_POST) + (x - X_POST_R) / (6.4000 - X_POST_R) * THETA_POST
-    return THETA_POST + (x - X_POST_L) / (X_POST_R - X_POST_L) * (HALF_PI - 2.0 * THETA_POST)
-
-
-def bend_point(x: float, y: float, z: float):
-    theta = x_to_theta(x)
-    r = RADIUS + z
-    return (r * math.sin(theta), y, -RADIUS + r * math.cos(theta))
-
-
 def clip_poly_x(poly, x_cut: float, keep_ge: bool):
     """Clip polygon [(x, y, z, u, v), ...] against x = x_cut with vertex snapping."""
     snap = 0.0015
@@ -109,6 +137,11 @@ def clip_poly_x(poly, x_cut: float, keep_ge: bool):
             t = da / (da - db)
             out.append(tuple(a[k] + (b[k] - a[k]) * t for k in range(5)))
     return out
+
+
+def fan_triangles(poly):
+    for i in range(1, len(poly) - 1):
+        yield (poly[0], poly[i], poly[i + 1])
 
 
 def slice_tri_along_x(v0, v1, v2, cuts):
@@ -143,15 +176,15 @@ def slice_tri_along_x(v0, v1, v2, cuts):
     return tris
 
 
-def build_corner_wall():
+def build_corner_wall(spec: CornerSpec, target: Path = TARGET):
     src_doc, src_blob = load_glb(SOURCE)
     src_mesh = src_doc["meshes"][0]
 
     cuts_smooth = [
-        X_POST_L + (X_POST_R - X_POST_L) * k / SMOOTH_STEPS for k in range(1, SMOOTH_STEPS)
+        X_POST_L + spec.body_len * k / SMOOTH_STEPS for k in range(1, SMOOTH_STEPS)
     ]
     cuts_stone = [
-        X_POST_L + (X_POST_R - X_POST_L) * k / STONE_STEPS for k in range(1, STONE_STEPS)
+        X_POST_L + spec.body_len * k / STONE_STEPS for k in range(1, STONE_STEPS)
     ]
 
     bin_data = bytearray()
@@ -159,7 +192,7 @@ def build_corner_wall():
     accessors = []
     primitives_out = []
 
-    def append_buffer(raw: bytes, target: int) -> int:
+    def append_buffer(raw: bytes, target_array: int) -> int:
         while len(bin_data) % 4:
             bin_data.append(0)
         offset = len(bin_data)
@@ -169,7 +202,7 @@ def build_corner_wall():
                 "buffer": 0,
                 "byteOffset": offset,
                 "byteLength": len(raw),
-                "target": target,
+                "target": target_array,
             }
         )
         return len(buffer_views) - 1
@@ -184,7 +217,7 @@ def build_corner_wall():
 
         bent_tris = []
         if pi == 2:
-            # Extract the first plinth pebble and place rigid copies evenly along the arc.
+            # Extract one plinth pebble and place rigid copies along the short arc.
             pebble = []
             for i in range(0, len(inds), 3):
                 i0, i1, i2 = inds[i], inds[i + 1], inds[i + 2]
@@ -192,17 +225,17 @@ def build_corner_wall():
                     pebble.append(
                         ((pts[i0], uvs[i0]), (pts[i1], uvs[i1]), (pts[i2], uvs[i2]))
                     )
-            arc_span = HALF_PI - 2.0 * THETA_POST
+            arc_span = HALF_PI - 2.0 * spec.theta_post
             for k in range(PEBBLE_COUNT):
-                theta_c = THETA_POST + arc_span * (k + 0.5) / PEBBLE_COUNT
+                theta_c = spec.theta_post + arc_span * (k + 0.5) / PEBBLE_COUNT
                 st, ct = math.sin(theta_c), math.cos(theta_c)
                 for (pa, uva), (pb, uvb), (pc, uvc) in pebble:
                     tri_v = []
                     for p, uv in ((pa, uva), (pb, uvb), (pc, uvc)):
                         dx = p[0] - PEBBLE_SOURCE_CENTER_X
-                        r = RADIUS + (p[2] + Z_SHIFT)
+                        r = spec.radius + (p[2] + Z_SHIFT)
                         wx = r * st + dx * ct
-                        wz = -RADIUS + r * ct - dx * st
+                        wz = -spec.radius + r * ct - dx * st
                         tri_v.append((wx, p[1], wz, uv[0], uv[1]))
                     bent_tris.append(tuple(tri_v))
         else:
@@ -213,14 +246,29 @@ def build_corner_wall():
             )
             for i in range(0, len(inds), 3):
                 i0, i1, i2 = inds[i], inds[i + 1], inds[i + 2]
-                v0 = (pts[i0][0], pts[i0][1], pts[i0][2] + Z_SHIFT, uvs[i0][0], uvs[i0][1])
-                v1 = (pts[i1][0], pts[i1][1], pts[i1][2] + Z_SHIFT, uvs[i1][0], uvs[i1][1])
-                v2 = (pts[i2][0], pts[i2][1], pts[i2][2] + Z_SHIFT, uvs[i2][0], uvs[i2][1])
-                for a, b, c in slice_tri_along_x(v0, v1, v2, cuts):
-                    ba = bend_point(a[0], a[1], a[2]) + (a[3], a[4])
-                    bb = bend_point(b[0], b[1], b[2]) + (b[3], b[4])
-                    bc = bend_point(c[0], c[1], c[2]) + (c[3], c[4])
-                    bent_tris.append((ba, bb, bc))
+                tri = (
+                    (pts[i0][0], pts[i0][1], pts[i0][2] + Z_SHIFT, uvs[i0][0], uvs[i0][1]),
+                    (pts[i1][0], pts[i1][1], pts[i1][2] + Z_SHIFT, uvs[i1][0], uvs[i1][1]),
+                    (pts[i2][0], pts[i2][1], pts[i2][2] + Z_SHIFT, uvs[i2][0], uvs[i2][1]),
+                )
+                # Keep the entrance post + a 1:1 body slice and the exit post;
+                # discard the unused middle of the straight wall.
+                pieces = (
+                    clip_poly_x(list(tri), spec.x_body_end, False),
+                    clip_poly_x(list(tri), X_POST_R, True),
+                )
+                for poly in pieces:
+                    if len(poly) < 3:
+                        continue
+                    for a, b, c in fan_triangles(poly):
+                        for sa, sb, sc in slice_tri_along_x(a, b, c, cuts):
+                            bent_tris.append(
+                                (
+                                    spec.point(sa[0], sa[1], sa[2]) + (sa[3], sa[4]),
+                                    spec.point(sb[0], sb[1], sb[2]) + (sb[3], sb[4]),
+                                    spec.point(sc[0], sc[1], sc[2]) + (sc[3], sc[4]),
+                                )
+                            )
 
         pos_list = []
         nrm_list = []
@@ -269,13 +317,12 @@ def build_corner_wall():
         nrm_bytes = b"".join(struct.pack("<3f", *n) for n in nrm_list)
         uv_bytes = b"".join(struct.pack("<2f", *u) for u in uv_list)
         if vcount <= 65535:
-            idx_comp_type = 5123  # UNSIGNED_SHORT
+            idx_comp_type = 5123
             idx_bytes = b"".join(struct.pack("<H", i) for i in idx_list)
         else:
-            idx_comp_type = 5125  # UNSIGNED_INT
+            idx_comp_type = 5125
             idx_bytes = b"".join(struct.pack("<I", i) for i in idx_list)
 
-        # Unpack rounded float32 positions so min/max match stored IEEE-754 floats exactly.
         stored_pos = list(struct.iter_unpack("<3f", pos_bytes))
         p_min = [min(p[axis] for p in stored_pos) for axis in range(3)]
         p_max = [max(p[axis] for p in stored_pos) for axis in range(3)]
@@ -297,23 +344,9 @@ def build_corner_wall():
             }
         )
         acc_nrm = len(accessors)
-        accessors.append(
-            {
-                "bufferView": bv_nrm,
-                "componentType": 5126,
-                "count": vcount,
-                "type": "VEC3",
-            }
-        )
+        accessors.append({"bufferView": bv_nrm, "componentType": 5126, "count": vcount, "type": "VEC3"})
         acc_uv = len(accessors)
-        accessors.append(
-            {
-                "bufferView": bv_uv,
-                "componentType": 5126,
-                "count": vcount,
-                "type": "VEC2",
-            }
-        )
+        accessors.append({"bufferView": bv_uv, "componentType": 5126, "count": vcount, "type": "VEC2"})
         acc_idx = len(accessors)
         accessors.append(
             {
@@ -326,11 +359,7 @@ def build_corner_wall():
 
         primitives_out.append(
             {
-                "attributes": {
-                    "POSITION": acc_pos,
-                    "NORMAL": acc_nrm,
-                    "TEXCOORD_0": acc_uv,
-                },
+                "attributes": {"POSITION": acc_pos, "NORMAL": acc_nrm, "TEXCOORD_0": acc_uv},
                 "indices": acc_idx,
                 "material": prim["material"],
                 "mode": 4,
@@ -341,10 +370,16 @@ def build_corner_wall():
         bin_data.append(0)
 
     out_doc = {
-        "asset": {"generator": "generate_wall_corners.py", "version": "2.0"},
+        "asset": {"generator": "generate_wall_corners.py v3", "version": "2.0"},
         "scene": 0,
         "scenes": [{"name": "Scene", "nodes": [0]}],
-        "nodes": [{"mesh": 0, "name": "CornerWall"}],
+        "nodes": [
+            {
+                "mesh": 0,
+                "name": "CornerWall",
+                "extras": {"radius": spec.radius, "stone_scale": "1:1"},
+            }
+        ],
         "materials": src_doc["materials"],
         "meshes": [{"name": "CornerWall", "primitives": primitives_out}],
         "accessors": accessors,
@@ -364,12 +399,14 @@ def build_corner_wall():
         + struct.pack("<I4s", len(bin_data), b"BIN\x00")
         + bytes(bin_data)
     )
-    TARGET.write_bytes(glb_bytes)
+    target.write_bytes(glb_bytes)
     print(
-        f"{TARGET}: {len(glb_bytes):,} bytes ({len(glb_bytes) / 1024:.1f} KB), "
-        f"{total_verts:,} vertices, {total_tris:,} triangles"
+        f"{target}: {len(glb_bytes):,} bytes ({len(glb_bytes) / 1024:.1f} KB), "
+        f"{total_verts:,} vertices, {total_tris:,} triangles, radius {spec.radius:.2f} m"
     )
 
 
 if __name__ == "__main__":
-    build_corner_wall()
+    radius = float(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_RADIUS
+    out = Path(sys.argv[2]) if len(sys.argv) > 2 else TARGET
+    build_corner_wall(CornerSpec(radius), out)
