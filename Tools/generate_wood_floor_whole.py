@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Build the continuous broad-board floor used by the main scene.
+"""Build a warm basket-weave parquet floor for the first-floor ring.
 
     python Tools/generate_wood_floor_whole.py            # regenerate all 4 GLBs
     python Tools/generate_wood_floor_whole.py --layout  # print placement
 
-The rounded-square room gets long smoky-oak boards with staggered end joints,
-a quiet lengthwise grain, and a warm perimeter band that picks up the wall
-posts. A single solid subfloor closes the shallow board joints above the
-checkerboard collision floor. Standard library only, byte reproducible.
+The room is filled with square parquet panels. Each panel contains two short
+boards, and neighboring panels alternate their direction for a woven pattern.
+A warm oak perimeter band echoes the wall posts. The floor remains one mesh,
+clipped to the rounded-square room, with a closed subfloor above the collider.
+Standard library only, byte reproducible.
 """
 import math
 import sys
@@ -51,38 +52,46 @@ def outer_boundary():
 
 
 def whole_grid():
-    """Equal row boundaries across the room."""
-    return g.block_grid(-H, H, g.PLANK_WIDTH)
+    """Equal square-panel boundaries across the rounded room's bounding box."""
+    return g.block_grid(-H, H, g.PANEL_SIZE)
 
 
-def row_seams(row):
-    return g.staggered_seams(-H, H, g.PLANK_LENGTH, bool(row % 2))
+def panel_parts(row, col):
+    """Two board rectangles and their grain axes for one woven square panel."""
+    seams = whole_grid()
+    x0, x1 = seams[col], seams[col + 1]
+    z0, z1 = seams[row], seams[row + 1]
+    if (row + col) % 2 == 0:
+        mid = (z0 + z1) * 0.5
+        return ((x0, x1, z0, mid, 0.0), (x0, x1, mid, z1, 0.0))
+    mid = (x0 + x1) * 0.5
+    return ((x0, mid, z0, z1, math.pi / 2), (mid, x1, z0, z1, math.pi / 2))
 
 
 _BLOCKS = None
 
 
 def whole_blocks():
-    """{(row, column): clipped board footprint}, cached, no GLB needed."""
+    """{(row, column, half): clipped board footprint}, cached, no GLB needed."""
     global _BLOCKS
     if _BLOCKS is not None:
         return _BLOCKS
-    zs = whole_grid()
+    seams = whole_grid()
     inner = g.inset_outline(outer_boundary(), g.FRAME_WIDTH)
     hps = polygon_halfplanes(inner)
     blocks = {}
-    for row in range(len(zs) - 1):
-        xs = row_seams(row)
-        for col in range(len(xs) - 1):
-            poly = g.clean(g.clip_all(g.rect(xs[col], zs[row], xs[col + 1], zs[row + 1]), hps))
-            if poly and g.area(poly) >= g.MIN_AREA:
-                blocks[(row, col)] = poly
+    for row in range(len(seams) - 1):
+        for col in range(len(seams) - 1):
+            for part, (x0, x1, z0, z1, _direction) in enumerate(panel_parts(row, col)):
+                poly = g.clean(g.clip_all(g.rect(x0, z0, x1, z1), hps))
+                if poly and g.area(poly) >= g.MIN_AREA:
+                    blocks[(row, col, part)] = poly
     _BLOCKS = blocks
     return blocks
 
 
 def add_perimeter_frame(tris, outer, inner):
-    """Warm-oak continuous frame ring; shares its inner boundary with boards."""
+    """Warm-oak continuous frame ring; shares its inner boundary with parquet."""
     if len(outer) != len(inner):
         raise ValueError("perimeter frame outlines must have matching vertices")
     ring = {g.MAT: []}
@@ -105,29 +114,35 @@ def build_whole_floor():
     tris = g.empty_tris()
     g.add_subfloor(tris, outer)
     add_perimeter_frame(tris, outer, inner)
-    zs = whole_grid()
+    seams = whole_grid()
     blocks = {}
-    for row in range(len(zs) - 1):
-        xs = row_seams(row)
-        for col in range(len(xs) - 1):
-            poly = g.clean(g.clip_all(g.rect(xs[col], zs[row], xs[col + 1], zs[row + 1]), inner_hps))
-            if not poly or g.area(poly) < g.MIN_AREA:
-                continue
-            blocks[(row, col)] = poly
-            g.add_block(tris, poly, g.seed_for(99, row, col),
-                        g.tone_for(99, row, col))
+    for row in range(len(seams) - 1):
+        for col in range(len(seams) - 1):
+            tone = g.tone_for(99, row, col)
+            for part, (x0, x1, z0, z1, direction) in enumerate(panel_parts(row, col)):
+                poly = g.clean(g.clip_all(g.rect(x0, z0, x1, z1), inner_hps))
+                if not poly or g.area(poly) < g.MIN_AREA:
+                    continue
+                blocks[(row, col, part)] = poly
+                seed = g.seed_for(99 + part, row, col)
+                g.add_block(tris, poly, seed, tone, direction)
     return tris, blocks
 
 
 def whole_meta(blocks):
+    panels_per_axis = len(whole_grid()) - 1
     return {
         "board_count": len(blocks),
+        "panel_count": panels_per_axis * panels_per_axis,
+        "panel_size": round(g.PANEL_SIZE, 6),
         "board_width": round(g.PLANK_WIDTH, 6),
         "board_length": round(g.PLANK_LENGTH, 6),
         "frame_width": round(g.FRAME_WIDTH, 6),
-        "grid": [len(row_seams(0)) - 1, len(whole_grid()) - 1],
+        "grid": [panels_per_axis, panels_per_axis],
+        "style": "warm basket-weave square parquet",
         "continuous": True,
-        "staggered_joints": True,
+        "staggered_joints": False,
+        "basket_weave": True,
         "perimeter_frame": True,
         "frame_material": g.FRAME_MAT,
     }
@@ -147,7 +162,7 @@ def main():
     meta = whole_meta(blocks)
     size, count = g.write_glb(g.OUT_DIR / WHOLE_NAME, tris, "Wood_Floor_Whole",
                               2 * H, 2 * H, False, meta)
-    print("%s: %s bytes, %d triangles, %d boards, %.4f x %.4f m, one mesh"
+    print("%s: %s bytes, %d triangles, %d parquet boards, %.4f x %.4f m, one mesh"
           % (WHOLE_NAME, format(size, ","), count, len(blocks), 2 * H, 2 * H))
 
 

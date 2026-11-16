@@ -82,31 +82,33 @@ class WallMatchedWoodFloor(unittest.TestCase):
             self.assertGreaterEqual(extra["board_count"], 5, name)
             self.assertGreaterEqual(min(p[1] for p in positions(doc, blob)), gen.BASE_Y - 1e-5)
 
-    def test_palette_is_quiet_smoky_brown_with_warm_oak_trim(self):
-        self.assertEqual(gen.WOOD_HEX, "#5E544A")
+    def test_palette_is_warm_wood_with_matching_oak_trim(self):
+        self.assertEqual(gen.WOOD_HEX, "#805637")
         self.assertEqual(gen.FRAME_HEX, "#7A5230")
         self.assertEqual(gen.MATERIALS[4]["name"], "Oak_Perimeter_Frame")
         self.assertEqual(gen.MATERIALS[4]["pbrMetallicRoughness"]["baseColorFactor"][:3],
                          gen.linear(gen.FRAME_HEX))
         values = [tuple(int(color[k:k + 2], 16) for k in (1, 3, 5))
                   for color in gen.WOOD_TONES]
-        for rgb in values:
-            self.assertLessEqual(max(rgb) - min(rgb), 25)
+        for red, green, blue in values:
+            self.assertGreater(red, green)
+            self.assertGreater(green, blue)
         self.assertLessEqual(max(max(abs(a - b) for a, b in zip(values[0], c))
                                  for c in values[1:]), 8)
-        self.assertGreaterEqual(gen.PLANK_LENGTH / gen.PLANK_WIDTH, 4.0)
+        self.assertAlmostEqual(gen.PLANK_LENGTH / gen.PLANK_WIDTH, 2.0)
+        self.assertAlmostEqual(gen.PANEL_SIZE, gen.PLANK_LENGTH)
         self.assertGreater(gen.FRAME_WIDTH, 0.2)
 
-    def test_main_floor_has_staggered_boards_and_oak_perimeter_frame(self):
+    def test_main_floor_has_woven_square_panels_and_oak_perimeter_frame(self):
         doc, blob = read_glb(ROOT / "Models" / "Floor" / whole.WHOLE_NAME)
         extra = doc["nodes"][0]["extras"]
         self.assertTrue(extra["continuous"])
-        self.assertTrue(extra["staggered_joints"])
+        self.assertTrue(extra["basket_weave"])
         self.assertTrue(extra["perimeter_frame"])
+        self.assertEqual(extra["style"], "warm basket-weave square parquet")
         self.assertAlmostEqual(extra["frame_width"], gen.FRAME_WIDTH, places=6)
-        self.assertAlmostEqual(extra["board_width"], gen.PLANK_WIDTH, places=6)
-        self.assertAlmostEqual(extra["board_length"], gen.PLANK_LENGTH, places=6)
-        self.assertGreaterEqual(extra["board_count"], 250)
+        self.assertAlmostEqual(extra["panel_size"], gen.PANEL_SIZE, places=6)
+        self.assertGreaterEqual(extra["board_count"], 450)
         primitives = doc["meshes"][0]["primitives"]
         self.assertIn(gen.FRAME_MAT, [p["material"] for p in primitives])
         self.assertEqual(len(doc["meshes"]), 1)
@@ -122,29 +124,29 @@ class WallMatchedWoodFloor(unittest.TestCase):
 
         blocks = whole.whole_blocks()
         self.assertEqual(len(blocks), extra["board_count"])
-        z_seams = whole.whole_grid()
+        seams = whole.whole_grid()
         full_board_count = 0
-        for (row, col), poly in blocks.items():
-            x_seams = whole.row_seams(row)
+        for (row, col, part), poly in blocks.items():
+            x0, x1, z0, z1, direction = whole.panel_parts(row, col)[part]
             width = max(p[0] for p in poly) - min(p[0] for p in poly)
             depth = max(p[1] for p in poly) - min(p[1] for p in poly)
-            self.assertLessEqual(width, x_seams[col + 1] - x_seams[col] + 1e-6)
-            self.assertLessEqual(depth, z_seams[row + 1] - z_seams[row] + 1e-6)
-            expected_area = ((x_seams[col + 1] - x_seams[col])
-                             * (z_seams[row + 1] - z_seams[row]))
+            self.assertLessEqual(width, x1 - x0 + 1e-6)
+            self.assertLessEqual(depth, z1 - z0 + 1e-6)
+            self.assertAlmostEqual(direction, 0.0 if (row + col) % 2 == 0 else math.pi / 2)
+            expected_area = (x1 - x0) * (z1 - z0)
             if abs(gen.area(poly) - expected_area) < 1e-6:
                 full_board_count += 1
-                self.assertGreater(width / depth, 3.5)
-        self.assertGreater(full_board_count, 100)
+                self.assertAlmostEqual(max(width, depth) / min(width, depth), 2.0, delta=0.02)
+        self.assertGreater(full_board_count, 300)
+        self.assertEqual(extra["grid"], [len(seams) - 1, len(seams) - 1])
 
-        # Alternate rows move their end joints by half a board.
-        even = set(round(v, 5) for v in whole.row_seams(2)[1:-1])
-        odd = set(round(v, 5) for v in whole.row_seams(3)[1:-1])
-        self.assertFalse(even & odd)
+        # Neighboring square panels rotate their short board pairs by 90 degrees.
+        self.assertEqual(whole.panel_parts(4, 4)[0][-1], 0.0)
+        self.assertEqual(whole.panel_parts(4, 5)[0][-1], math.pi / 2)
 
     def test_clipped_field_has_no_holes_and_stays_inside_frame(self):
         blocks = whole.whole_blocks()
-        zs = whole.whole_grid()
+        seams = whole.whole_grid()
         inner = gen.inset_outline(whole.outer_boundary(), gen.FRAME_WIDTH)
         step = 0.13
         checked = 0
@@ -154,10 +156,11 @@ class WallMatchedWoodFloor(unittest.TestCase):
                 z = -whole.H + (iz + 0.57) * step
                 if not point_in_poly(x, z, inner):
                     continue
-                row = find_interval(zs, z)
-                xs = whole.row_seams(row)
-                col = find_interval(xs, x)
-                poly = blocks.get((row, col))
+                row, col = find_interval(seams, z), find_interval(seams, x)
+                part = (0 if z < (seams[row] + seams[row + 1]) * 0.5 else 1)
+                if (row + col) % 2:
+                    part = (0 if x < (seams[col] + seams[col + 1]) * 0.5 else 1)
+                poly = blocks.get((row, col, part))
                 checked += 1
                 self.assertIsNotNone(poly)
                 self.assertTrue(point_in_poly(x, z, poly), (x, z))

@@ -26,8 +26,9 @@ INNER_R = RADIUS - 1.0          # 3.0743 - wall inner arc / floor corner radius
 H = MODULE + INNER_R            # 9.4743, half of the interior rounded square
 ARC_STEPS = 28
 
-PLANK_WIDTH = 0.52             # broad, readable boards instead of small tiles
-PLANK_LENGTH = 2.4
+PLANK_WIDTH = 0.60             # paired short boards form square parquet panels
+PLANK_LENGTH = 1.2
+PANEL_SIZE = 1.2
 FRAME_WIDTH = 0.28             # perimeter band in the warm wall-post oak
 INSET = 0.012                  # subtle bevel at board joints
 GROOVE = 0.0055                # shallow 5.5 mm V-joint
@@ -45,8 +46,8 @@ GRAIN_JITTER = 0.045
 
 # Smoky brown-gray field with a little variation; warm oak is reserved for the
 # border, visually tying the floor to the timber posts around the room.
-WOOD_HEX = "#5E544A"
-WOOD_TONES = ("#5E544A", "#61574D", "#5B5148", "#60564C")
+WOOD_HEX = "#805637"
+WOOD_TONES = ("#805637", "#855B3B", "#7B5234", "#835939")
 FRAME_HEX = "#7A5230"
 
 ASSETS = {
@@ -284,10 +285,10 @@ def grain_strips(seed, vmin, vmax):
     return out
 
 
-def add_grain_top(tris, poly, y, seed):
-    """Real wood fibres: irregular shallow V-grooves running along the board."""
+def add_grain_top(tris, poly, y, seed, direction=0.0):
+    """Fine wood grain along the board's long axis, with slight irregularity."""
     r = (seed_for(seed, 0, 23) % 1000) / 1000.0
-    theta = (r - 0.5) * 2.0 * GRAIN_JITTER
+    theta = direction + (r - 0.5) * 2.0 * GRAIN_JITTER
     nx, nz = -math.sin(theta), math.cos(theta)
     vs = [nx * p[0] + nz * p[1] for p in poly]
     vmin, vmax = min(vs) - 1e-6, max(vs) + 1e-6
@@ -311,7 +312,7 @@ def add_grain_top(tris, poly, y, seed):
                     (0.0, 1.0, 0.0))
 
 
-def add_block(tris, poly, seed, mat=None):
+def add_block(tris, poly, seed, mat=None, grain_direction=0.0):
     """One board: restrained lengthwise grain and shallow V-chamfer."""
     if mat is None:
         mat = MAT
@@ -322,7 +323,7 @@ def add_block(tris, poly, seed, mat=None):
     top = inset_outline(poly, INSET)
     if len(top) != len(poly):
         top = radial_shrink(poly, INSET)
-    add_grain_top(local, top, TOP_Y, seed)
+    add_grain_top(local, top, TOP_Y, seed, grain_direction)
     cx, cz = centroid(poly)
     n = len(poly)
     for i in range(n):
@@ -453,7 +454,7 @@ def write_glb(path, tris, name, width, depth, corner, meta=None):
         blob.append(0)
 
     extras = {"cell": [width, depth], "corner": corner,
-              "style": "staggered smoky-oak boards with warm oak perimeter frame",
+              "style": "warm wood parquet boards with oak perimeter frame",
               "material_count": len(MATERIALS), "tone_count": len(WOOD_TONES),
               "painted_details": False, "grain_grooves": True,
               "perimeter_frame": False, "frame_material": FRAME_MAT,
