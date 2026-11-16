@@ -6,7 +6,7 @@
 [ext_resource type="Script" uid="uid://cnjr2p75ao1pj" path="res://enemy_health_overlay.gd" id="5_overlay"]
 [ext_resource type="PackedScene" path="res://Models/Wall_with_collision.tscn" id="6_7mycd"]
 [ext_resource type="PackedScene" path="res://Models/Corner_Wall_with_collision.tscn" id="9_kek77"]
-[ext_resource type="PackedScene" uid="uid://dc08ib6tdaf3l" path="res://Models/Floor/Wood_Floor_Whole.glb" id="13_woodwhole"]
+[ext_resource type="Script" path="res://floor_variant_selector.gd" id="13_floor_selector"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_1"]
 sky_horizon_color = Color(0.64625, 0.65575, 0.67075, 1)
@@ -139,6 +139,4 @@ transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, -4.0743, 0, -4.0743)
 
 [node name="WoodFloor" type="Node3D" parent="." unique_id=-1994967296]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.02, 0)
-
-[node name="floor_whole" parent="WoodFloor" unique_id=-1994967295 instance=ExtResource("13_woodwhole")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+script = ExtResource("13_floor_selector")

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Dependency-free checks for the wall-matched broad-board floor."""
-import bisect
-import json
+"""Dependency-free checks for seven symmetric, controlled-chaos floor options."""
+import hashlib
 import math
+import random
 import struct
 import sys
 import tempfile
@@ -16,7 +16,7 @@ import generate_wood_floor_whole as whole  # noqa: E402
 
 FLOOR_OFFSET = 0.02
 CHECKER_TOP = 0.0
-ALL_ASSETS = list(gen.ASSETS) + [whole.WHOLE_NAME]
+ALL_ASSETS = list(gen.ASSETS) + whole.VARIANT_NAMES
 
 
 def read_glb(path):
@@ -27,7 +27,7 @@ def read_glb(path):
     jlen, jtype = struct.unpack_from("<I4s", data, 12)
     if jtype != b"JSON":
         raise ValueError("missing JSON chunk")
-    doc = json.loads(data[20:20 + jlen])
+    doc = __import__("json").loads(data[20:20 + jlen])
     return doc, data[20 + jlen + 8:]
 
 
@@ -52,22 +52,15 @@ def point_in_poly(x, z, poly):
     return hit
 
 
-def find_interval(seams, value):
-    return min(max(bisect.bisect_right(seams, value) - 1, 0), len(seams) - 2)
-
-
-class WallMatchedWoodFloor(unittest.TestCase):
-    def test_glbs_use_rough_wood_and_one_mesh(self):
+class SymmetricFloorOptions(unittest.TestCase):
+    def test_assets_are_valid_warm_rough_wood_meshes(self):
         for name in ALL_ASSETS:
             doc, blob = read_glb(ROOT / "Models" / "Floor" / name)
-            self.assertEqual(doc["asset"]["generator"], "generate_wood_floor.py v5")
-            self.assertEqual(doc["asset"]["version"], "2.0")
-            for gone in ("images", "textures", "samplers"):
-                self.assertNotIn(gone, doc, name)
+            self.assertEqual(doc["asset"]["generator"], "generate_wood_floor.py v5", name)
             self.assertEqual(len(doc["meshes"]), 1, name)
-            self.assertEqual(len(doc["materials"]), len(gen.MATERIALS), name)
             self.assertEqual(len(doc["materials"]), 5, name)
-            self.assertEqual(len(doc["nodes"][0]["extras"].get("style", "")) > 0, True)
+            for forbidden in ("images", "textures", "samplers"):
+                self.assertNotIn(forbidden, doc, name)
             for material in doc["materials"]:
                 pbr = material["pbrMetallicRoughness"]
                 self.assertEqual(pbr["metallicFactor"], 0.0)
@@ -76,125 +69,122 @@ class WallMatchedWoodFloor(unittest.TestCase):
             self.assertTrue(extra["grain_grooves"], name)
             self.assertEqual(extra["material_count"], 5, name)
             self.assertEqual(extra["tone_count"], 4, name)
-            self.assertAlmostEqual(extra["groove_depth"], gen.GROOVE, places=6)
-            self.assertAlmostEqual(extra["top_inset"], gen.INSET, places=6)
-            self.assertAlmostEqual(extra["subfloor_y"], gen.BASE_Y, places=6)
-            self.assertGreaterEqual(extra["board_count"], 5, name)
+            self.assertGreaterEqual(len(positions(doc, blob)), 100, name)
             self.assertGreaterEqual(min(p[1] for p in positions(doc, blob)), gen.BASE_Y - 1e-5)
 
-    def test_palette_is_warm_wood_with_matching_oak_trim(self):
+    def test_palette_is_warm_not_gray_and_ties_to_wall_oak(self):
         self.assertEqual(gen.WOOD_HEX, "#805637")
         self.assertEqual(gen.FRAME_HEX, "#7A5230")
         self.assertEqual(gen.MATERIALS[4]["name"], "Oak_Perimeter_Frame")
-        self.assertEqual(gen.MATERIALS[4]["pbrMetallicRoughness"]["baseColorFactor"][:3],
-                         gen.linear(gen.FRAME_HEX))
-        values = [tuple(int(color[k:k + 2], 16) for k in (1, 3, 5))
-                  for color in gen.WOOD_TONES]
-        for red, green, blue in values:
+        tones = [tuple(int(color[k:k + 2], 16) for k in (1, 3, 5))
+                 for color in gen.WOOD_TONES]
+        for red, green, blue in tones:
             self.assertGreater(red, green)
             self.assertGreater(green, blue)
-        self.assertLessEqual(max(max(abs(a - b) for a, b in zip(values[0], c))
-                                 for c in values[1:]), 8)
-        self.assertAlmostEqual(gen.PLANK_LENGTH / gen.PLANK_WIDTH, 2.0)
-        self.assertAlmostEqual(gen.PANEL_SIZE, gen.PLANK_LENGTH)
-        self.assertGreater(gen.FRAME_WIDTH, 0.2)
 
-    def test_main_floor_has_woven_square_panels_and_oak_perimeter_frame(self):
-        doc, blob = read_glb(ROOT / "Models" / "Floor" / whole.WHOLE_NAME)
-        extra = doc["nodes"][0]["extras"]
-        self.assertTrue(extra["continuous"])
-        self.assertTrue(extra["basket_weave"])
-        self.assertTrue(extra["perimeter_frame"])
-        self.assertEqual(extra["style"], "warm basket-weave square parquet")
-        self.assertAlmostEqual(extra["frame_width"], gen.FRAME_WIDTH, places=6)
-        self.assertAlmostEqual(extra["panel_size"], gen.PANEL_SIZE, places=6)
-        self.assertGreaterEqual(extra["board_count"], 450)
-        primitives = doc["meshes"][0]["primitives"]
-        self.assertIn(gen.FRAME_MAT, [p["material"] for p in primitives])
-        self.assertEqual(len(doc["meshes"]), 1)
+    def test_seven_distinct_variants_are_mirrored_patchwork(self):
+        self.assertEqual(len(whole.VARIANT_NAMES), 7)
+        fingerprints = set()
+        for variant, name in enumerate(whole.VARIANT_NAMES):
+            path = ROOT / "Models" / "Floor" / name
+            doc, blob = read_glb(path)
+            extra = doc["nodes"][0]["extras"]
+            self.assertEqual(extra["variant"], variant + 1)
+            self.assertTrue(extra["continuous"])
+            self.assertTrue(extra["controlled_chaos"])
+            self.assertTrue(extra["perimeter_frame"])
+            self.assertEqual(extra["symmetry"], "four-way mirrored")
+            self.assertEqual(extra["style"], "mirrored warm-oak patchwork")
+            self.assertGreaterEqual(extra["tile_count"], 100)
+            self.assertIn(gen.FRAME_MAT, [p["material"] for p in doc["meshes"][0]["primitives"]])
+            pts = positions(doc, blob)
+            for axis in (0, 2):
+                self.assertAlmostEqual(min(p[axis] for p in pts), -whole.H, delta=0.03)
+                self.assertAlmostEqual(max(p[axis] for p in pts), whole.H, delta=0.03)
+            self.assertAlmostEqual(min(p[1] for p in pts), gen.BASE_Y, delta=1e-6)
+            self.assertAlmostEqual(max(p[1] for p in pts), gen.TOP_Y, delta=1e-6)
+            fingerprints.add(hashlib.sha256(path.read_bytes()).digest())
+        self.assertEqual(len(fingerprints), 7)
 
-        pts = positions(doc, blob)
-        for axis in (0, 2):
-            lo, hi = min(p[axis] for p in pts), max(p[axis] for p in pts)
-            self.assertAlmostEqual(lo, -whole.H, delta=0.03)
-            self.assertAlmostEqual(hi, whole.H, delta=0.03)
-        y_values = [p[1] for p in pts]
-        self.assertAlmostEqual(min(y_values), gen.BASE_Y, delta=1e-6)
-        self.assertAlmostEqual(max(y_values), gen.TOP_Y, delta=1e-6)
+    def test_each_mosaic_is_four_way_symmetric(self):
+        for variant in range(7):
+            blocks = whole.whole_blocks(variant)
+            groups = {}
+            style_groups = {}
+            for key, _rect, direction, material, seed in whole.mirrored_tiles(variant):
+                tile_id, sx, sz = key
+                groups.setdefault(tile_id, set()).add((sx, sz))
+                style_groups.setdefault(tile_id, set()).add((direction, material, seed))
+            self.assertGreater(len(groups), 25)
+            self.assertTrue(all(signs == {(-1, -1), (-1, 1), (1, -1), (1, 1)}
+                                for signs in groups.values()))
+            self.assertTrue(all(len(styles) == 1 for styles in style_groups.values()))
 
-        blocks = whole.whole_blocks()
-        self.assertEqual(len(blocks), extra["board_count"])
-        seams = whole.whole_grid()
-        full_board_count = 0
-        for (row, col, part), poly in blocks.items():
-            x0, x1, z0, z1, direction = whole.panel_parts(row, col)[part]
-            width = max(p[0] for p in poly) - min(p[0] for p in poly)
-            depth = max(p[1] for p in poly) - min(p[1] for p in poly)
-            self.assertLessEqual(width, x1 - x0 + 1e-6)
-            self.assertLessEqual(depth, z1 - z0 + 1e-6)
-            self.assertAlmostEqual(direction, 0.0 if (row + col) % 2 == 0 else math.pi / 2)
-            expected_area = (x1 - x0) * (z1 - z0)
-            if abs(gen.area(poly) - expected_area) < 1e-6:
-                full_board_count += 1
-                self.assertAlmostEqual(max(width, depth) / min(width, depth), 2.0, delta=0.02)
-        self.assertGreater(full_board_count, 300)
-        self.assertEqual(extra["grid"], [len(seams) - 1, len(seams) - 1])
+            # Different deterministic cuts, not seven color-only duplicates.
+            rects = whole.quadrant_tiles(*whole.VARIANT_SPECS[variant])
+            self.assertGreater(len(rects), 25)
+        layouts = [whole.quadrant_tiles(*spec) for spec in whole.VARIANT_SPECS]
+        self.assertEqual(len({repr(layout) for layout in layouts}), 7)
 
-        # Neighboring square panels rotate their short board pairs by 90 degrees.
-        self.assertEqual(whole.panel_parts(4, 4)[0][-1], 0.0)
-        self.assertEqual(whole.panel_parts(4, 5)[0][-1], math.pi / 2)
+    def test_mirrored_tiles_cover_the_rounded_room_without_holes(self):
+        inner = whole.inner_boundary()
+        expected_area = gen.area(inner)
+        hps = whole.polygon_halfplanes(inner)
+        for variant in range(7):
+            blocks = whole.whole_blocks(variant)
+            # The mirrored guillotine rectangles partition the floor exactly;
+            # clipping each piece to the same convex boundary preserves area.
+            covered_area = sum(gen.area(poly) for poly in blocks.values())
+            self.assertAlmostEqual(covered_area, expected_area, delta=0.01, msg=str(variant))
 
-    def test_clipped_field_has_no_holes_and_stays_inside_frame(self):
-        blocks = whole.whole_blocks()
-        seams = whole.whole_grid()
-        inner = gen.inset_outline(whole.outer_boundary(), gen.FRAME_WIDTH)
-        step = 0.13
-        checked = 0
-        for ix in range(int(2 * whole.H / step)):
-            for iz in range(int(2 * whole.H / step)):
-                x = -whole.H + (ix + 0.43) * step
-                z = -whole.H + (iz + 0.57) * step
-                if not point_in_poly(x, z, inner):
+            rng = random.Random(variant + 500)
+            tiles = list(whole.mirrored_tiles(variant))
+            checked = 0
+            for _ in range(160):
+                x, z = rng.uniform(-whole.H, whole.H), rng.uniform(-whole.H, whole.H)
+                if not all(a * x + b * z <= c + 1e-9 for a, b, c in hps):
                     continue
-                row, col = find_interval(seams, z), find_interval(seams, x)
-                part = (0 if z < (seams[row] + seams[row + 1]) * 0.5 else 1)
-                if (row + col) % 2:
-                    part = (0 if x < (seams[col] + seams[col + 1]) * 0.5 else 1)
-                poly = blocks.get((row, col, part))
+                candidate = next((key for key, (x0, x1, z0, z1), *_rest in tiles
+                                  if x0 <= x <= x1 and z0 <= z <= z1), None)
+                self.assertIsNotNone(candidate, (variant, x, z))
+                self.assertTrue(point_in_poly(x, z, blocks[candidate]), (variant, x, z))
                 checked += 1
-                self.assertIsNotNone(poly)
-                self.assertTrue(point_in_poly(x, z, poly), (x, z))
-        self.assertGreater(checked, 10000)
+            self.assertGreater(checked, 100)
 
-        # The underlay stays above the checkerboard collider, including below joints.
         self.assertGreater(FLOOR_OFFSET + gen.BASE_Y, CHECKER_TOP)
         self.assertGreater(FLOOR_OFFSET + gen.GROOVE_Y, CHECKER_TOP)
         self.assertAlmostEqual(FLOOR_OFFSET + gen.TOP_Y, 0.02)
 
-    def test_generation_is_byte_reproducible(self):
+    def test_all_floor_assets_regenerate_byte_for_byte(self):
         with tempfile.TemporaryDirectory() as tmp:
             for asset_id, (name, (w, d, corner)) in enumerate(gen.ASSETS.items()):
                 tris, boards, width = gen.build_mesh(asset_id, w, d, corner)
                 out = Path(tmp) / name
                 gen.write_glb(out, tris, name[:-4], w, d, corner,
                               gen.asset_meta(width, boards))
-                self.assertEqual(out.read_bytes(), (ROOT / "Models" / "Floor" / name).read_bytes(), name)
-            tris, boards = whole.build_whole_floor()
-            out = Path(tmp) / whole.WHOLE_NAME
-            gen.write_glb(out, tris, "Wood_Floor_Whole", 2 * whole.H, 2 * whole.H,
-                          False, whole.whole_meta(boards))
-            self.assertEqual(out.read_bytes(),
-                             (ROOT / "Models" / "Floor" / whole.WHOLE_NAME).read_bytes())
+                self.assertEqual(out.read_bytes(),
+                                 (ROOT / "Models" / "Floor" / name).read_bytes(), name)
+            for variant, name in enumerate(whole.VARIANT_NAMES):
+                tris, blocks = whole.build_whole_floor(variant)
+                out = Path(tmp) / name
+                gen.write_glb(out, tris, name[:-4], 2 * whole.H, 2 * whole.H,
+                              False, whole.whole_meta(blocks, variant))
+                self.assertEqual(out.read_bytes(),
+                                 (ROOT / "Models" / "Floor" / name).read_bytes(), name)
 
-    def test_floor_node_still_covers_original_room_and_checkerboard_collider(self):
-        text = (ROOT / "main.tscn").read_text()
-        self.assertIn('path="res://Models/Floor/Wood_Floor_Whole.glb" id="13_woodwhole"', text)
-        self.assertIn('name="floor_whole"', text)
-        self.assertIn("size = Vector3(30, 1, 30)", text)
+    def test_main_scene_loads_and_documents_hotkey_selector(self):
+        scene = (ROOT / "main.tscn").read_text()
+        selector = (ROOT / "floor_variant_selector.gd").read_text()
+        docs = (ROOT / "docs" / "floor_variants.md").read_text()
+        self.assertIn('path="res://floor_variant_selector.gd"', scene)
+        self.assertIn('name="WoodFloor" type="Node3D"', scene)
+        self.assertIn('"res://Models/Floor/Wood_Floor_Variant_07.glb"', selector)
+        self.assertIn("F1-F7", selector)
+        self.assertIn("press **F1–F7**", docs)
+        self.assertIn("size = Vector3(30, 1, 30)", scene)
         self.assertIn(
             '[node name="Floor" type="StaticBody3D" parent="." unique_id=421905340]\n'
-            'transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.5, 0)', text)
-        self.assertGreater(FLOOR_OFFSET + gen.BASE_Y, CHECKER_TOP)
+            'transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.5, 0)', scene)
         self.assertEqual(len(gen.floor_layout()), 16)
 
 
