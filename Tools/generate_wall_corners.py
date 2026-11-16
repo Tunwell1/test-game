@@ -1,205 +1,375 @@
 #!/usr/bin/env python3
-"""Rebuild the corner GLBs from Wall.glb. Requires numpy, scipy and pygltflib.
+"""Build the 6.4 x 6.4 m modular Corner_Wall.glb from Models/Wall.glb.
 
-All dimensions are metres. The source's stone triangles are reused, rather than
-approximating the masonry with a texture. Run from the repository root.
+Uses only the Python standard library — run from the repository root:
+    python3 Tools/generate_wall_corners.py
+
+The generator bends Wall.glb onto a 90-degree outer corner arc of nominal radius
+6.4 m centered at (0, y, -6.4) while:
+  - shifting Z by -0.55414675 m so the entrance seam at x = 0 aligns with the
+    modular wall plane (z in [-1.0, +0.2]) without needing a wrapper transform;
+  - keeping both end half-posts at their exact 0.20 m width so corner-to-wall
+    V-posts match straight wall joints;
+  - slicing only horizontally along X (32 steps on curved timber/ledges, 12 steps
+    on masonry, rigid un-stretched pebbles on the plinth) instead of uniform 3D
+    subdivision, keeping the model lightweight (~7k triangles, <1 MB).
 """
+import json
 import math
-from collections import defaultdict
 from pathlib import Path
-import numpy as np
-from scipy.sparse import coo_matrix
-from scipy.sparse.csgraph import connected_components
-from scipy.spatial import ConvexHull
-from pygltflib import (GLTF2, Scene, Node, Mesh, Primitive, Attributes, Buffer,
-                       BufferView, Accessor)
+import struct
 
-SOURCE = Path('Models/Wall.glb')
-G = GLTF2().load(str(SOURCE))
-B = G.binary_blob()
+SOURCE = Path("Models/Wall.glb")
+TARGET = Path("Models/Corner_Wall.glb")
 
-def accessor(idx):
-    a = G.accessors[idx]; v = G.bufferViews[a.bufferView]
-    dtype = {5126: np.float32, 5123: np.uint16, 5125: np.uint32}[a.componentType]
-    n = {'SCALAR': 1, 'VEC2': 2, 'VEC3': 3, 'VEC4': 4}[a.type]
-    stride = v.byteStride or n * np.dtype(dtype).itemsize
-    return np.ndarray((a.count, n), dtype=dtype, buffer=B,
-                      offset=(v.byteOffset or 0) + (a.byteOffset or 0),
-                      strides=(stride, np.dtype(dtype).itemsize)).copy()
+RADIUS = 6.4
+HALF_PI = math.pi / 2.0
+# Aligns Wall.glb's raw Z [-0.44589..+0.75415] to modular Z [-1.0000..+0.2000].
+Z_SHIFT = -0.55414675
 
-def area2(p):
-    return sum(p[i][0]*p[(i+1)%len(p)][1]-p[(i+1)%len(p)][0]*p[i][1] for i in range(len(p)))
+X_MIN = -0.007502
+X_POST_L = 0.2014
+X_POST_R = 6.2014
+X_MAX = 6.402498
+THETA_POST = 0.20 / RADIUS
 
-def det(a,b): return a[0]*b[1]-a[1]*b[0]
+SMOOTH_STEPS = 32
+STONE_STEPS = 12
+PEBBLE_COUNT = 5
+PEBBLE_SOURCE_CENTER_X = 1.2017
 
-def triangulate(poly):
-    # Ear clipping, also supports the concave outline of the sharp post.
-    p = np.array(poly); order = list(range(len(p)))
-    if area2(p) < 0: order.reverse()
+
+def load_glb(path: Path):
+    data = path.read_bytes()
+    magic, version, length = struct.unpack_from("<4sII", data, 0)
+    if (magic, version, length) != (b"glTF", 2, len(data)):
+        raise ValueError(f"Invalid GLB header in {path}")
+    json_len, json_type = struct.unpack_from("<I4s", data, 12)
+    if json_type != b"JSON":
+        raise ValueError(f"Expected JSON chunk in {path}")
+    doc = json.loads(data[20 : 20 + json_len])
+    bin_offset = 20 + json_len
+    bin_len, bin_type = struct.unpack_from("<I4s", data, bin_offset)
+    if bin_type != b"BIN\x00":
+        raise ValueError(f"Expected BIN chunk in {path}")
+    blob = data[bin_offset + 8 : bin_offset + 8 + bin_len]
+    return doc, blob
+
+
+def read_accessor(doc, blob: bytes, idx: int):
+    acc = doc["accessors"][idx]
+    bv = doc["bufferViews"][acc["bufferView"]]
+    fmt_char = {5120: "b", 5121: "B", 5122: "h", 5123: "H", 5125: "I", 5126: "f"}[
+        acc["componentType"]
+    ]
+    comp_size = struct.calcsize("<" + fmt_char)
+    ncomp = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}[acc["type"]]
+    stride = bv.get("byteStride", ncomp * comp_size)
+    base = bv.get("byteOffset", 0) + acc.get("byteOffset", 0)
+    fmt = "<" + fmt_char * ncomp
+    return [struct.unpack_from(fmt, blob, base + i * stride) for i in range(acc["count"])]
+
+
+def x_to_theta(x: float) -> float:
+    if x <= 0.0015:
+        return 0.0
+    if x >= 6.4000:
+        return HALF_PI
+    if x <= X_POST_L:
+        return (x - 0.0015) / (X_POST_L - 0.0015) * THETA_POST
+    if x >= X_POST_R:
+        return (HALF_PI - THETA_POST) + (x - X_POST_R) / (6.4000 - X_POST_R) * THETA_POST
+    return THETA_POST + (x - X_POST_L) / (X_POST_R - X_POST_L) * (HALF_PI - 2.0 * THETA_POST)
+
+
+def bend_point(x: float, y: float, z: float):
+    theta = x_to_theta(x)
+    r = RADIUS + z
+    return (r * math.sin(theta), y, -RADIUS + r * math.cos(theta))
+
+
+def clip_poly_x(poly, x_cut: float, keep_ge: bool):
+    """Clip polygon [(x, y, z, u, v), ...] against x = x_cut with vertex snapping."""
+    snap = 0.0015
+    dists = []
+    for p in poly:
+        d = p[0] - x_cut
+        dists.append(0.0 if abs(d) < snap else d)
+
     out = []
-    while len(order) > 3:
-        for j in range(len(order)):
-            a,b,c = order[j-1], order[j], order[(j+1)%len(order)]
-            cross = det(p[b]-p[a],p[c]-p[b])
-            if cross <= 1e-10: continue
-            def inside(q):
-                return all(det(p[v]-p[u], q-p[u]) >= -1e-10 for u,v in [(a,b),(b,c),(c,a)])
-            if any(inside(p[k]) for k in order if k not in (a,b,c)): continue
-            out.append((a,b,c)); order.pop(j); break
-        else: raise ValueError('Invalid polygon: '+str(poly))
-    out.append(tuple(order)); return out
+    n = len(poly)
+    for i in range(n):
+        a, b = poly[i], poly[(i + 1) % n]
+        da, db = dists[i], dists[(i + 1) % n]
+        ina = (da >= 0.0) if keep_ge else (da <= 0.0)
+        inb = (db >= 0.0) if keep_ge else (db <= 0.0)
+        if ina:
+            out.append(a)
+        if (da > 0.0 and db < 0.0) or (da < 0.0 and db > 0.0):
+            t = da / (da - db)
+            out.append(tuple(a[k] + (b[k] - a[k]) * t for k in range(5)))
+    return out
 
-class Builder:
-    def __init__(self): self.tris = defaultdict(list)
-    def tri(self, mat, a,b,c):
-        a,b,c = map(lambda v: np.asarray(v,dtype=float), (a,b,c))
-        if np.linalg.norm(np.cross(b-a,c-a)) > 2e-7: self.tris[mat].append([a,b,c])
-    def quad(self, mat, a,b,c,d):
-        self.tri(mat,a,b,c); self.tri(mat,a,c,d)
-    def sweep(self, mat, profile, steps, mapping):
-        # profile(t) supplies a counter-clockwise y,z polygon.
-        profiles = [profile(t) for t in steps]
-        if area2(profiles[0]) < 0: profiles = [list(reversed(p)) for p in profiles]
-        rings = [[mapping(t,y,z) for y,z in p] for t,p in zip(steps,profiles)]
-        for k in range(len(rings)-1):
-            r,s = rings[k],rings[k+1]
-            for i in range(len(r)):
-                j=(i+1)%len(r)
-                self.quad(mat,r[i],s[j],s[i],r[j])
-        for a,b,c in triangulate(profiles[0]): self.tri(mat,rings[0][c],rings[0][b],rings[0][a])
-        for a,b,c in triangulate(profiles[-1]): self.tri(mat,rings[-1][a],rings[-1][b],rings[-1][c])
-    def vertical(self, mat, levels, polys):
-        # Polygons in x,z are counter-clockwise; their normal is -Y.
-        if area2(polys[0]) < 0: polys = [list(reversed(p)) for p in polys]
-        rings = [[(x,y,z) for x,z in p] for y,p in zip(levels,polys)]
-        for k in range(len(rings)-1):
-            r,s=rings[k],rings[k+1]
-            for i in range(len(r)):
-                j=(i+1)%len(r); self.quad(mat,r[i],s[i],s[j],r[j])
-        for a,b,c in triangulate(polys[0]): self.tri(mat,rings[0][a],rings[0][b],rings[0][c])
-        for a,b,c in triangulate(polys[-1]): self.tri(mat,rings[-1][c],rings[-1][b],rings[-1][a])
-    def save(self, path, name):
-        data=bytearray(); views=[]; accs=[]; prims=[]
-        def add(arr, typ, component, target, bounds=False):
-            while len(data)%4: data.append(0)
-            start=len(data); data.extend(arr.tobytes()); views.append(BufferView(buffer=0,byteOffset=start,byteLength=arr.nbytes,target=target))
-            kw={}
-            if bounds: kw={'min':arr.min(axis=0).astype(float).tolist(),'max':arr.max(axis=0).astype(float).tolist()}
-            accs.append(Accessor(bufferView=len(views)-1,componentType=component,count=len(arr),type=typ,**kw)); return len(accs)-1
-        for mat, ts in sorted(self.tris.items()):
-            t=np.asarray(ts,dtype=np.float32); n=np.cross(t[:,1]-t[:,0],t[:,2]-t[:,0]); n/=np.linalg.norm(n,axis=1)[:,None]
-            pos=t.reshape(-1,3); normal=np.repeat(n,3,axis=0); uv=np.zeros((len(pos),2),dtype=np.float32)
-            ind=np.arange(len(pos),dtype=np.uint32)
-            a=add(pos,'VEC3',5126,34962,True); b=add(normal,'VEC3',5126,34962); c=add(uv,'VEC2',5126,34962); d=add(ind,'SCALAR',5125,34963)
-            prims.append(Primitive(attributes=Attributes(POSITION=a,NORMAL=b,TEXCOORD_0=c),indices=d,material=mat,mode=4))
-        while len(data)%4: data.append(0)
-        gl=GLTF2(asset=G.asset,scene=0,scenes=[Scene(nodes=[0])],nodes=[Node(name=name,mesh=0)],meshes=[Mesh(name=name,primitives=prims)],materials=G.materials, buffers=[Buffer(byteLength=len(data))],bufferViews=views,accessors=accs)
-        gl.set_binary_blob(bytes(data)); gl.save_binary(str(path)); print(path, sum(len(t) for t in self.tris.values()),'triangles')
 
-def clip(poly, x, keep_above):
-    out=[]; hits=[]
-    for a,b in zip(poly,poly[1:]+poly[:1]):
-        ia=(a[0]>=x) if keep_above else (a[0]<=x); ib=(b[0]>=x) if keep_above else (b[0]<=x)
-        if ia: out.append(a)
-        if ia != ib:
-            q=a+(b-a)*((x-a[0])/(b[0]-a[0])); out.append(q); hits.append(q)
-    return out,hits
+def slice_tri_along_x(v0, v1, v2, cuts):
+    lo = min(v0[0], v1[0], v2[0])
+    hi = max(v0[0], v1[0], v2[0])
+    rel = [c for c in cuts if lo + 0.002 < c < hi - 0.002]
+    if not rel:
+        return [(v0, v1, v2)]
 
-def components(prim):
-    p=G.meshes[0].primitives[prim]; v=accessor(p.attributes.POSITION).astype(float); v[:,2]-=0.5541
-    f=accessor(p.indices).reshape(-1,3); _, inv=np.unique(np.round(v,5),axis=0,return_inverse=True); t=inv[f]; count=inv.max()+1
-    rows=np.hstack([t[:,0],t[:,1],t[:,2]]); cols=np.hstack([t[:,1],t[:,2],t[:,0]])
-    _,lab=connected_components(coo_matrix((np.ones(len(rows)),(rows,cols)),shape=(count,count)),directed=False)
-    face_lab=lab[t[:,0]]
-    return [v[f[face_lab==i]] for i in np.unique(face_lab)]
+    polys = [[v0, v1, v2]]
+    for c in rel:
+        next_polys = []
+        for poly in polys:
+            left = clip_poly_x(poly, c, False)
+            right = clip_poly_x(poly, c, True)
+            if len(left) >= 3:
+                next_polys.append(left)
+            if len(right) >= 3:
+                next_polys.append(right)
+        polys = next_polys
 
-STONE = {i:components(i) for i in (2,3,4,5)}
-def copy_clipped(builder, mat, tris, shift, low, high, mapping, reverse=False, subdivide=False):
-    cap=[[],[]]
-    for tri in tris:
-        poly=[v+np.array([shift,0,0]) for v in tri]
-        poly,h=clip(poly,low,True); cap[0].extend(h)
-        if not poly: continue
-        poly,h=clip(poly,high,False); cap[1].extend(h)
-        if len(poly)<3: continue
-        pieces = [poly]
-        if subdivide:
-            # Bend narrow strips instead of long chords that cut through the
-            # backing on the inside of the arc.
-            pieces = []
-            lo=min(q[0] for q in poly); hi=max(q[0] for q in poly)
-            for k in range(math.floor(lo/.16), math.ceil(hi/.16)):
-                piece,_=clip(poly,k*.16,True)
-                if piece: piece,_=clip(piece,(k+1)*.16,False)
-                if len(piece)>=3: pieces.append(piece)
-        for piece in pieces:
-            for i in range(1,len(piece)-1):
-                v=[mapping(*p) for p in (piece[0],piece[i],piece[i+1])]
-                if reverse: v.reverse()
-                builder.tri(mat,*v)
-    # Seal cut stones. A convex hull is adequate for the small cut surfaces and
-    # avoids cracks where source facets are split into material primitives.
-    for side,pts in enumerate(cap):
-        if len(pts)<3: continue
-        pts=np.unique(np.round(pts,7),axis=0)
-        if len(pts)<3: continue
-        try: hull=ConvexHull(pts[:,1:3])
-        except Exception: continue
-        pp=pts[hull.vertices]; center=pp.mean(axis=0)
-        # y,z counter-clockwise points in +X.
-        for i in range(len(pp)):
-            v=[mapping(*q) for q in (center,pp[i],pp[(i+1)%len(pp)])]
-            if (side==0) != reverse: v.reverse()
-            builder.tri(mat,*v)
+    tris = []
+    for poly in polys:
+        clean = []
+        for p in poly:
+            if not clean or sum((p[k] - clean[-1][k]) ** 2 for k in range(3)) > 1e-10:
+                clean.append(p)
+        if len(clean) >= 2 and sum((clean[0][k] - clean[-1][k]) ** 2 for k in range(3)) <= 1e-10:
+            clean.pop()
+        for i in range(1, len(clean) - 1):
+            tris.append((clean[0], clean[i], clean[i + 1]))
+    return tris
 
-def const(poly): return lambda t: poly
-BACK=[(0,-1),(0,-.8),(6,-.8),(6,-1)]
-BASE=[(0,-.8),(0,0),(.4,-.4),(.4,-.8)]
-TOP=[(5.6,-.8),(5.6,-.4),(6,0),(6,-.8)]
-MORTAR=[(.2,-.75),(.2,-.5),(5.8,-.5),(5.8,-.75)]
-def half(t):
-    h=1/3; outer=.2*(1-t)
-    return [(0,-.8),(0,outer),(3,outer-h),(6,outer),(6,-.8)]
-def arc(t,y,z):
-    r=6.4+z; return (r*math.sin(t),y,-6.4+r*math.cos(t))
-def straight(t,y,z): return (t,y,z)
-def mirror(x,y,z): return (6.4+z,y,x-6.4)
-def post(h): return [(5.6,-.8),(6.4-h,-.8),(6.4-h,-.4),(6.6-h,-.2),(6.6-h,.2-h),(6.2,.2-h),(6,-h),(5.6,-h)]
 
-def sharp():
-    b=Builder()
-    b.vertical(0,[0,6],[[(0,-1),(5.4,-1),(5.4,-6.4),(5.6,-6.4),(5.6,-.8),(0,-.8)]]*2)
-    b.sweep(7,lambda x:half(x/.2),[0,.2],straight)
-    start=len(b.tris[0]); b.sweep(0,lambda x:half(x/.2),[0,.2],lambda x,y,z: mirror(x,y,z))
-    b.tris[0][start:]=[t[::-1] for t in b.tris[0][start:]]
-    b.vertical(0,[0,3,6],[post(0),post(1/3),post(0)])
-    for mat,profile in [(1,BASE),(1,TOP),(6,MORTAR)]:
-        end = 5.6 if mat == 1 else 6.0
-        b.sweep(mat,const(profile),[.2,end],straight)
-        start=len(b.tris[mat]); b.sweep(mat,const(profile),[.2,end],lambda x,y,z:mirror(x,y,z))
-        b.tris[mat][start:]=[t[::-1] for t in b.tris[mat][start:]]
-    for mat, groups in STONE.items():
-        for tris in groups:
-            copy_clipped(b,mat,tris,0,.2,6,straight)
-            copy_clipped(b,mat,tris,0,.2,6,mirror,True)
-    b.save('Models/Wall_corner_90.glb','WallCorner90')
+def build_corner_wall():
+    src_doc, src_blob = load_glb(SOURCE)
+    src_mesh = src_doc["meshes"][0]
 
-def smooth():
-    b=Builder(); end=math.pi/2; p=.2/6.4; endwall=end-p; length=(endwall-p)*6.4
-    b.sweep(0,const(BACK),np.linspace(0,end,49),arc)
-    b.sweep(7,lambda t:half(t/p),[0,p/2,p],arc)
-    b.sweep(0,lambda t:half((end-t)/p),[endwall,(endwall+end)/2,end],arc)
-    for mat,profile in [(1,BASE),(1,TOP),(6,MORTAR)]:
-        # Do not place a coplanar back face on the curved timber backing.
-        profile=[(y,max(z,-.79)) for y,z in profile]
-        b.sweep(mat,const(profile),np.linspace(p,endwall,45),arc)
-    def bend(x,y,z): return arc(p+x/6.4,y,max(z,-.75))
-    # Reuse the 6 m stone course with a half-metre overlap into end posts.
-    for mat,groups in STONE.items():
-        for tris in groups:
-            if mat != 2 and np.ptp(tris[:,:,2]) < .05: continue
-            for shift in (0,6):
-                copy_clipped(b,mat,tris,shift,.2, length+.2,lambda x,y,z:bend(x-.2,y,z),subdivide=True)
-    b.save('Models/Wall_corner_smooth.glb','WallCornerSmooth')
+    cuts_smooth = [
+        X_POST_L + (X_POST_R - X_POST_L) * k / SMOOTH_STEPS for k in range(1, SMOOTH_STEPS)
+    ]
+    cuts_stone = [
+        X_POST_L + (X_POST_R - X_POST_L) * k / STONE_STEPS for k in range(1, STONE_STEPS)
+    ]
 
-if __name__=='__main__': sharp(); smooth()
+    bin_data = bytearray()
+    buffer_views = []
+    accessors = []
+    primitives_out = []
+
+    def append_buffer(raw: bytes, target: int) -> int:
+        while len(bin_data) % 4:
+            bin_data.append(0)
+        offset = len(bin_data)
+        bin_data.extend(raw)
+        buffer_views.append(
+            {
+                "buffer": 0,
+                "byteOffset": offset,
+                "byteLength": len(raw),
+                "target": target,
+            }
+        )
+        return len(buffer_views) - 1
+
+    total_tris = 0
+    total_verts = 0
+
+    for pi, prim in enumerate(src_mesh["primitives"]):
+        pts = read_accessor(src_doc, src_blob, prim["attributes"]["POSITION"])
+        uvs = read_accessor(src_doc, src_blob, prim["attributes"]["TEXCOORD_0"])
+        inds = [x[0] for x in read_accessor(src_doc, src_blob, prim["indices"])]
+
+        bent_tris = []
+        if pi == 2:
+            # Extract the first plinth pebble and place rigid copies evenly along the arc.
+            pebble = []
+            for i in range(0, len(inds), 3):
+                i0, i1, i2 = inds[i], inds[i + 1], inds[i + 2]
+                if max(pts[i0][0], pts[i1][0], pts[i2][0]) < 2.0:
+                    pebble.append(
+                        ((pts[i0], uvs[i0]), (pts[i1], uvs[i1]), (pts[i2], uvs[i2]))
+                    )
+            arc_span = HALF_PI - 2.0 * THETA_POST
+            for k in range(PEBBLE_COUNT):
+                theta_c = THETA_POST + arc_span * (k + 0.5) / PEBBLE_COUNT
+                st, ct = math.sin(theta_c), math.cos(theta_c)
+                for (pa, uva), (pb, uvb), (pc, uvc) in pebble:
+                    tri_v = []
+                    for p, uv in ((pa, uva), (pb, uvb), (pc, uvc)):
+                        dx = p[0] - PEBBLE_SOURCE_CENTER_X
+                        r = RADIUS + (p[2] + Z_SHIFT)
+                        wx = r * st + dx * ct
+                        wz = -RADIUS + r * ct - dx * st
+                        tri_v.append((wx, p[1], wz, uv[0], uv[1]))
+                    bent_tris.append(tuple(tri_v))
+        else:
+            cuts = (
+                cuts_smooth
+                if pi in (0, 1)
+                else (cuts_stone if pi in (3, 4, 5, 6) else [])
+            )
+            for i in range(0, len(inds), 3):
+                i0, i1, i2 = inds[i], inds[i + 1], inds[i + 2]
+                v0 = (pts[i0][0], pts[i0][1], pts[i0][2] + Z_SHIFT, uvs[i0][0], uvs[i0][1])
+                v1 = (pts[i1][0], pts[i1][1], pts[i1][2] + Z_SHIFT, uvs[i1][0], uvs[i1][1])
+                v2 = (pts[i2][0], pts[i2][1], pts[i2][2] + Z_SHIFT, uvs[i2][0], uvs[i2][1])
+                for a, b, c in slice_tri_along_x(v0, v1, v2, cuts):
+                    ba = bend_point(a[0], a[1], a[2]) + (a[3], a[4])
+                    bb = bend_point(b[0], b[1], b[2]) + (b[3], b[4])
+                    bc = bend_point(c[0], c[1], c[2]) + (c[3], c[4])
+                    bent_tris.append((ba, bb, bc))
+
+        pos_list = []
+        nrm_list = []
+        uv_list = []
+        idx_list = []
+        vert_map = {}
+
+        for a, b, c in bent_tris:
+            ux, uy, uz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+            vx, vy, vz = c[0] - a[0], c[1] - a[1], c[2] - a[2]
+            nx = uy * vz - uz * vy
+            ny = uz * vx - ux * vz
+            nz = ux * vy - uy * vx
+            mag = math.sqrt(nx * nx + ny * ny + nz * nz)
+            if mag <= 1e-6:
+                continue
+            nx, ny, nz = nx / mag, ny / mag, nz / mag
+
+            tri_indices = []
+            for v in (a, b, c):
+                key = (
+                    round(v[0], 6),
+                    round(v[1], 6),
+                    round(v[2], 6),
+                    round(nx, 5),
+                    round(ny, 5),
+                    round(nz, 5),
+                    round(v[3], 5),
+                    round(v[4], 5),
+                )
+                v_idx = vert_map.get(key)
+                if v_idx is None:
+                    v_idx = len(pos_list)
+                    vert_map[key] = v_idx
+                    pos_list.append((v[0], v[1], v[2]))
+                    nrm_list.append((nx, ny, nz))
+                    uv_list.append((v[3], v[4]))
+                tri_indices.append(v_idx)
+            idx_list.extend(tri_indices)
+
+        vcount = len(pos_list)
+        total_verts += vcount
+        total_tris += len(idx_list) // 3
+
+        pos_bytes = b"".join(struct.pack("<3f", *p) for p in pos_list)
+        nrm_bytes = b"".join(struct.pack("<3f", *n) for n in nrm_list)
+        uv_bytes = b"".join(struct.pack("<2f", *u) for u in uv_list)
+        if vcount <= 65535:
+            idx_comp_type = 5123  # UNSIGNED_SHORT
+            idx_bytes = b"".join(struct.pack("<H", i) for i in idx_list)
+        else:
+            idx_comp_type = 5125  # UNSIGNED_INT
+            idx_bytes = b"".join(struct.pack("<I", i) for i in idx_list)
+
+        # Unpack rounded float32 positions so min/max match stored IEEE-754 floats exactly.
+        stored_pos = list(struct.iter_unpack("<3f", pos_bytes))
+        p_min = [min(p[axis] for p in stored_pos) for axis in range(3)]
+        p_max = [max(p[axis] for p in stored_pos) for axis in range(3)]
+
+        bv_pos = append_buffer(pos_bytes, 34962)
+        bv_nrm = append_buffer(nrm_bytes, 34962)
+        bv_uv = append_buffer(uv_bytes, 34962)
+        bv_idx = append_buffer(idx_bytes, 34963)
+
+        acc_pos = len(accessors)
+        accessors.append(
+            {
+                "bufferView": bv_pos,
+                "componentType": 5126,
+                "count": vcount,
+                "type": "VEC3",
+                "min": p_min,
+                "max": p_max,
+            }
+        )
+        acc_nrm = len(accessors)
+        accessors.append(
+            {
+                "bufferView": bv_nrm,
+                "componentType": 5126,
+                "count": vcount,
+                "type": "VEC3",
+            }
+        )
+        acc_uv = len(accessors)
+        accessors.append(
+            {
+                "bufferView": bv_uv,
+                "componentType": 5126,
+                "count": vcount,
+                "type": "VEC2",
+            }
+        )
+        acc_idx = len(accessors)
+        accessors.append(
+            {
+                "bufferView": bv_idx,
+                "componentType": idx_comp_type,
+                "count": len(idx_list),
+                "type": "SCALAR",
+            }
+        )
+
+        primitives_out.append(
+            {
+                "attributes": {
+                    "POSITION": acc_pos,
+                    "NORMAL": acc_nrm,
+                    "TEXCOORD_0": acc_uv,
+                },
+                "indices": acc_idx,
+                "material": prim["material"],
+                "mode": 4,
+            }
+        )
+
+    while len(bin_data) % 4:
+        bin_data.append(0)
+
+    out_doc = {
+        "asset": {"generator": "generate_wall_corners.py", "version": "2.0"},
+        "scene": 0,
+        "scenes": [{"name": "Scene", "nodes": [0]}],
+        "nodes": [{"mesh": 0, "name": "CornerWall"}],
+        "materials": src_doc["materials"],
+        "meshes": [{"name": "CornerWall", "primitives": primitives_out}],
+        "accessors": accessors,
+        "bufferViews": buffer_views,
+        "buffers": [{"byteLength": len(bin_data)}],
+    }
+
+    json_bytes = json.dumps(out_doc, separators=(",", ":")).encode("utf-8")
+    while len(json_bytes) % 4:
+        json_bytes += b" "
+
+    total_len = 12 + 8 + len(json_bytes) + 8 + len(bin_data)
+    glb_bytes = (
+        struct.pack("<4sII", b"glTF", 2, total_len)
+        + struct.pack("<I4s", len(json_bytes), b"JSON")
+        + json_bytes
+        + struct.pack("<I4s", len(bin_data), b"BIN\x00")
+        + bytes(bin_data)
+    )
+    TARGET.write_bytes(glb_bytes)
+    print(
+        f"{TARGET}: {len(glb_bytes):,} bytes ({len(glb_bytes) / 1024:.1f} KB), "
+        f"{total_verts:,} vertices, {total_tris:,} triangles"
+    )
+
+
+if __name__ == "__main__":
+    build_corner_wall()

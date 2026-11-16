@@ -7,7 +7,7 @@
 [ext_resource type="PackedScene" path="res://Models/Wall_with_collision.tscn" id="6_7mycd"]
 [ext_resource type="PackedScene" path="res://Models/Wall_and_two_windows_with_collision.tscn" id="7_two_windows"]
 [ext_resource type="PackedScene" path="res://Models/Wall_door_with_collision.tscn" id="8_door"]
-[ext_resource type="PackedScene" uid="uid://ctb2nh37rymen" path="res://Models/Corner_Wall.glb" id="9_kek77"]
+[ext_resource type="PackedScene" path="res://Models/Corner_Wall_with_collision.tscn" id="9_kek77"]
 [ext_resource type="PackedScene" path="res://Models/Wall_and_window_with_collision.tscn" id="9_window"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_1"]
@@ -154,4 +154,4 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 19.2, 0, 0)
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 25.6, 0, 0)
 
 [node name="Corner_Wall" parent="." unique_id=2081043683 instance=ExtResource("9_kek77")]
-transform = Transform3D(-4.371139e-08, 0, -1, 0, 1, 0, 1, 0, -4.371139e-08, -4.05, 0, -4.65)
+transform = Transform3D(-4.371139e-08, 0, -1, 0, 1, 0, 1, 0, -4.371139e-08, -6.4, 0, -6.4)

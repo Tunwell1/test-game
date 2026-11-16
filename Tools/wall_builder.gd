@@ -22,11 +22,10 @@ const MODULES := {
 	"window": "res://Models/Wall_and_window_with_collision.tscn",
 	"two_windows": "res://Models/Wall_and_two_windows_with_collision.tscn",
 	"door": "res://Models/Wall_door_with_collision.tscn",
-	"corner_90": "res://Models/Wall_corner_90_with_collision.tscn",
-	"corner_smooth": "res://Models/Wall_corner_smooth_with_collision.tscn",
+	"corner": "res://Models/Corner_Wall_with_collision.tscn",
 }
 ## Порядок модулей. Углы поворачивают дальнейший ряд на +90° вокруг Y.
-## Например: ["wall", "corner_90", "wall"] или corner_smooth.
+## Например: ["wall", "corner", "wall"].
 const PATTERN := ["door", "window", "wall", "two_windows", "wall"]
 
 
@@ -134,7 +133,7 @@ func _exit_transform(corner: bool) -> Transform3D:
 
 
 func _is_corner(key: String) -> bool:
-	return key == "corner_90" or key == "corner_smooth"
+	return key == "corner"
 
 
 ## Продолжение от последнего известного инстанса в порядке дерева сцены.
