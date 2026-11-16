@@ -5,9 +5,9 @@
 [ext_resource type="Script" uid="uid://cwgtp0lhnuofk" path="res://Interactable.gd" id="3_interact"]
 [ext_resource type="Script" uid="uid://cnjr2p75ao1pj" path="res://enemy_health_overlay.gd" id="5_overlay"]
 [ext_resource type="PackedScene" path="res://Models/Wall_with_collision.tscn" id="6_7mycd"]
-[ext_resource type="Script" uid="uid://cls3h3omxp6pi" path="res://Models/static_mesh_collision.gd" id="6_kek77"]
 [ext_resource type="PackedScene" path="res://Models/Wall_and_two_windows_with_collision.tscn" id="7_two_windows"]
 [ext_resource type="PackedScene" path="res://Models/Wall_door_with_collision.tscn" id="8_door"]
+[ext_resource type="PackedScene" uid="uid://ctb2nh37rymen" path="res://Models/Corner_Wall.glb" id="9_kek77"]
 [ext_resource type="PackedScene" path="res://Models/Wall_and_window_with_collision.tscn" id="9_window"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_1"]
@@ -78,6 +78,7 @@ collision_layer = 4
 script = ExtResource("3_interact")
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="BoxLeft" unique_id=1040693522]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -8)
 mesh = SubResource("BoxMesh_box")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="BoxLeft" unique_id=1997848562]
@@ -89,15 +90,18 @@ collision_layer = 4
 script = ExtResource("3_interact")
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="BoxRight" unique_id=347324519]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -5)
 mesh = SubResource("BoxMesh_box")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="BoxRight" unique_id=1092668638]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -8)
 shape = SubResource("BoxShape_box")
 
 [node name="LowCeiling" type="StaticBody3D" parent="." unique_id=1548379742]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.4, -4)
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="LowCeiling" unique_id=65150600]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -8)
 mesh = SubResource("BoxMesh_ceil")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="LowCeiling" unique_id=1761116681]
@@ -135,21 +139,19 @@ script = ExtResource("5_overlay")
 
 [node name="WallRun" type="Node3D" parent="." unique_id=1737964240]
 
-[node name="door_00" type="StaticBody3D" parent="WallRun" unique_id=326836813 instance=ExtResource("8_door")]
-script = ExtResource("6_kek77")
+[node name="door_00" parent="WallRun" unique_id=326836813 instance=ExtResource("8_door")]
 
-[node name="window_01" type="StaticBody3D" parent="WallRun" unique_id=736286938 instance=ExtResource("9_window")]
+[node name="window_01" parent="WallRun" unique_id=736286938 instance=ExtResource("9_window")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6.4, 0, 0)
-script = ExtResource("6_kek77")
 
-[node name="wall_02" type="StaticBody3D" parent="WallRun" unique_id=1749635324 instance=ExtResource("6_7mycd")]
+[node name="wall_02" parent="WallRun" unique_id=1749635324 instance=ExtResource("6_7mycd")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 12.8, 0, 0)
-script = ExtResource("6_kek77")
 
-[node name="two_windows_03" type="StaticBody3D" parent="WallRun" unique_id=174319845 instance=ExtResource("7_two_windows")]
+[node name="two_windows_03" parent="WallRun" unique_id=174319845 instance=ExtResource("7_two_windows")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 19.2, 0, 0)
-script = ExtResource("6_kek77")
 
-[node name="wall_04" type="StaticBody3D" parent="WallRun" unique_id=817183101 instance=ExtResource("6_7mycd")]
+[node name="wall_04" parent="WallRun" unique_id=817183101 instance=ExtResource("6_7mycd")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 25.6, 0, 0)
-script = ExtResource("6_kek77")
+
+[node name="Corner_Wall" parent="." unique_id=2081043683 instance=ExtResource("9_kek77")]
+transform = Transform3D(-4.371139e-08, 0, -1, 0, 1, 0, 1, 0, -4.371139e-08, -4.05, 0, -4.65)
