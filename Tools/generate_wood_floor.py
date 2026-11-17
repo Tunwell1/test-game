@@ -5,9 +5,13 @@
     python Tools/generate_wood_floor.py --layout  # print the 16 fallback placements
     python Tools/generate_wood_floor_whole.py     # those 3 + the ONE continuous floor
 
-ONE continuous mesh, REAL geometry. Square wood pavers (~0.34 m) are cut to the
+ONE continuous mesh, REAL geometry. Square wood pavers (~1.58 m) are cut to the
 wall's rounded-square inner face. The concentric "rings" of the previous version
 are gone: under a single directional light they read as printed eye/targets.
+The 0.34 m pavers of v4 were too small from player height, so v5 doubled the
+paver and v6 DOUBLED IT AGAIN (1.57905 m), always scaling the grain / V-groove
+with it. v6 also emits 16 separate module GLBs for the scene (see the whole
+generator), the single mesh remains only as a geometry reference for tests.
 
 Instead, each paver has REAL WOOD GRAIN: a handful of narrow V-grooves cut into
 the top face, running along a per-paver direction (0 or 90 degrees + jitter).
@@ -17,8 +21,8 @@ applied per paver, tied to its grain direction, via separate material slots -
 no big colour patches, no 6-tone quilt. This one constraint was explicitly
 relaxed to make the floor read as wood; the grain geometry does the real work.
 
-Between pavers there is NO through gap: the flat top is inset ~10 mm from the
-block's full outline and the sidewalls slope 8 mm DOWN to that outline. Two
+Between pavers there is NO through gap: the flat top is inset ~20 mm from the
+block's full outline and the sidewalls slope 10 mm DOWN to that outline. Two
 neighbours share the outline vertex-for-vertex, so the two chamfers form a
 closed V-groove. A continuous solid subfloor of the same wood sits 4 mm below
 the groove bottom at local y = -0.012, i.e. world y = +0.008 with the WoodFloor
@@ -40,19 +44,21 @@ INNER_R = RADIUS - 1.0          # 3.0743 - wall inner arc / floor corner radius
 H = MODULE + INNER_R            # 9.4743, half of the interior rounded square
 ARC_STEPS = 28
 
-GRID_N = 55                    # whole floor: 55 x 55 pavers
-PITCH = 2 * H / GRID_N         # 0.34452... m
-INSET = 0.010                  # flat top inset from the full block edge
-GROOVE = 0.008                 # V-groove depth (8 mm)
+GRID_N = 12                    # whole floor: 12 x 12 VERY LARGE pavers
+PITCH = 2 * H / GRID_N         # 1.57905 m (v5: 24 x 24 of 0.789525 m)
+INSET = 0.020                  # flat top inset from the full block edge
+GROOVE = 0.010                 # V-groove depth (10 mm)
 TOP_Y = 0.0                    # world 0.02 through the WoodFloor node
-GROOVE_Y = TOP_Y - GROOVE      # -0.008 -> world +0.012, full shared edge
+GROOVE_Y = TOP_Y - GROOVE      # -0.010 -> world +0.010, full shared edge
 BASE_Y = TOP_Y - 0.012         # -0.012 -> world +0.008, ABOVE the checkered y=0
 MIN_AREA = 1e-6
 
 # Real grain grooves: irregular land / groove / groove, all cut as geometry.
-GRAIN_LAND = (0.045, 0.072)    # flat land between grooves, metres
-GRAIN_WIDTH = (0.011, 0.018)   # groove width, metres
-GRAIN_DEPTH = (0.0018, 0.0034) # groove depth, metres
+# Scaled WITH the paver: at 0.34 m the old 11-18 mm grooves read as a fine
+# comb on a 1.58 m paver; keep ~6-8 fibres per paver at any GRID_N.
+GRAIN_LAND = (0.160, 0.260)    # flat land between grooves, metres
+GRAIN_WIDTH = (0.036, 0.060)   # groove width, metres
+GRAIN_DEPTH = (0.0036, 0.0063) # groove depth, metres
 GRAIN_JITTER = 0.09            # max grain direction jitter, radians
 
 WOOD_HEX = "#7A5230"           # base warm oak tone, matches wall posts
@@ -268,7 +274,7 @@ def add_top(tris, poly, y):
 def grain_strips(seed, vmin, vmax):
     """(v0, v1, y0, y1) strips: flat land, down-slope, up-slope."""
     out = []
-    v = vmin - 0.05
+    v = vmin - 0.20
     k = 0
     while v < vmax and k < 64:
         r1 = (seed_for(seed, k, 11) % 1000) / 1000.0
@@ -341,8 +347,12 @@ def add_block(tris, poly, seed, mat=None):
     tris.setdefault(mat, []).extend(local[MAT])
 
 
-def add_subfloor(tris, base_poly):
-    """Continuous solid wood under the V-grooves + a closed outer rim."""
+def add_subfloor(tris, base_poly, rim=None):
+    """Continuous solid wood under the V-grooves + a closed outer rim.
+
+    rim(p, q) optionally filters edges: adjacent floor MODULES must not emit two
+    coincident back-to-back rim walls on their shared internal seam.
+    """
     base = ccw(clean(base_poly))
     if len(base) < 3:
         return
@@ -351,6 +361,8 @@ def add_subfloor(tris, base_poly):
     n = len(base)
     for i in range(n):
         p, q = base[i], base[(i + 1) % n]
+        if rim is not None and not rim(p, q):
+            continue
         a = (p[0], GROOVE_Y, p[1])
         b = (q[0], GROOVE_Y, q[1])
         c = (q[0], BASE_Y, q[1])
@@ -451,7 +463,7 @@ def write_glb(path, tris, name, width, depth, corner, meta=None):
     if meta:
         extras.update(meta)
     doc = {
-        "asset": {"generator": "generate_wood_floor.py v4", "version": "2.0"},
+        "asset": {"generator": "generate_wood_floor.py v6", "version": "2.0"},
         "scene": 0,
         "scenes": [{"name": "Scene", "nodes": [0]}],
         "nodes": [{"mesh": 0, "name": name, "extras": extras}],

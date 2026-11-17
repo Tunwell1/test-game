@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dependency-free checks for the end-grain wooden floor.
+"""Dependency-free checks for the wooden floor (16 separate modules).
 
     python tests/test_wood_floor.py -v
 """
@@ -74,14 +74,15 @@ def point_in_poly(x, z, poly):
     return hit
 
 
-ALL_ASSETS = list(gen.ASSETS) + [whole.WHOLE_NAME]
+MODULE_ASSETS = [m["name"] for m in whole.module_layout()]
+ALL_ASSETS = list(gen.ASSETS) + MODULE_ASSETS + [whole.WHOLE_NAME]
 
 
 class WoodFloor(unittest.TestCase):
     def test_assets_are_valid_and_match_wall_style(self):
         for name in ALL_ASSETS:
             doc, blob = read_glb(ROOT / "Models" / "Floor" / name)
-            self.assertEqual(doc["asset"]["generator"], "generate_wood_floor.py v4", name)
+            self.assertEqual(doc["asset"]["generator"], "generate_wood_floor.py v6", name)
             self.assertEqual(doc["asset"]["version"], "2.0", name)
             for gone in ("images", "textures", "samplers"):
                 self.assertNotIn(gone, doc, name)
@@ -104,7 +105,7 @@ class WoodFloor(unittest.TestCase):
             self.assertAlmostEqual(extra["groove_depth"], gen.GROOVE, places=6)
             self.assertAlmostEqual(extra["top_inset"], gen.INSET, places=6)
             self.assertAlmostEqual(extra["subfloor_y"], gen.BASE_Y, places=6)
-            self.assertGreaterEqual(extra["block_count"], 50, name)
+            self.assertGreaterEqual(extra["block_count"], 2, name)
             lo, hi = bounds(doc, blob)
             self.assertGreaterEqual(lo[1], gen.BASE_Y - 1e-5, name)
             self.assertLessEqual(hi[1], gen.TOP_Y + 0.003, name)
@@ -152,9 +153,11 @@ class WoodFloor(unittest.TestCase):
             self.assertFalse(doc["nodes"][0]["extras"]["painted_details"], name)
 
     def test_block_grid_is_one_scale_everywhere(self):
-        self.assertGreaterEqual(gen.PITCH, 0.25)
-        self.assertLessEqual(gen.PITCH, 0.35)
-        self.assertEqual(gen.GRID_N, 55)
+        # Regression: 0.34452 m (55x55) and then 0.789525 m (24x24) pavers were
+        # both rejected as too small. Pavers must stay VERY LARGE (~1.58 m).
+        self.assertGreaterEqual(gen.PITCH, 1.20)
+        self.assertLessEqual(gen.PITCH, 1.90)
+        self.assertEqual(gen.GRID_N, 12)
         seams = whole.whole_grid()
         self.assertEqual(len(seams), gen.GRID_N + 1)
         self.assertAlmostEqual(seams[0], -whole.H, places=6)
@@ -166,11 +169,14 @@ class WoodFloor(unittest.TestCase):
         for name in ALL_ASSETS:
             doc, _ = read_glb(ROOT / "Models" / "Floor" / name)
             pitch = doc["nodes"][0]["extras"]["block_pitch"]
-            self.assertGreaterEqual(pitch, 0.25, name)
-            self.assertLessEqual(pitch, 0.35, name)
-            self.assertLess(abs(pitch - gen.PITCH), 0.01, name)
+            self.assertGreaterEqual(pitch, 1.20, name)
+            self.assertLessEqual(pitch, 1.90, name)
+            # The 3 fallback assets round to an integer cell count per asset,
+            # so their pitch differs slightly (1.60 / 1.5372) from the grid.
+            self.assertLess(abs(pitch - gen.PITCH), 0.04 * gen.PITCH, name)
 
     def test_whole_floor_is_wood_pavers_not_long_rows(self):
+        """The continuous mesh is REFERENCE ONLY; geometry truth for the tests."""
         doc, blob = read_glb(ROOT / "Models" / "Floor" / whole.WHOLE_NAME)
         for gone in ("images", "textures", "samplers"):
             self.assertNotIn(gone, doc)
@@ -181,16 +187,23 @@ class WoodFloor(unittest.TestCase):
 
         blocks = whole.whole_blocks()
         extra = doc["nodes"][0]["extras"]
-        self.assertGreater(len(blocks), 2500)
+        self.assertGreater(len(blocks), 100)
+        self.assertLess(len(blocks), 200)
         self.assertEqual(extra["block_count"], len(blocks))
         self.assertEqual(extra["grid"], [gen.GRID_N, gen.GRID_N])
         self.assertTrue(extra["continuous"])
         self.assertTrue(extra["grain_grooves"])
         self.assertEqual(extra["tone_count"], len(gen.MATERIALS))
-        self.assertGreaterEqual(extra["groove_depth"], 0.006)
+        self.assertGreaterEqual(extra["groove_depth"], 0.008)
         self.assertLessEqual(extra["groove_depth"], 0.010)
+        # Grain and the chamfer scale WITH the big paver, otherwise the top
+        # turns into a fine comb and the seams disappear at eye height.
+        self.assertGreaterEqual(gen.GRAIN_LAND[0], 0.12)
+        self.assertGreaterEqual(gen.GRAIN_WIDTH[0], 0.030)
+        self.assertGreaterEqual(gen.INSET, 0.018)
+        self.assertGreater(gen.PITCH / gen.GRAIN_LAND[0], 4.0)
 
-        # Every block is a small SQUARE, never a long plank / a long row.
+        # Every block is a SQUARE, never a long plank / a long row.
         xs = set()
         zs = set()
         seams = whole.whole_grid()
@@ -204,9 +217,8 @@ class WoodFloor(unittest.TestCase):
             self.assertLessEqual(depth, gen.PITCH + 1e-6, (i, j))
             if abs(gen.area(poly) - full_area) < 1e-7:   # uncut cell = square
                 self.assertAlmostEqual(width / depth, 1.0, delta=0.02, msg=str((i, j)))
-        self.assertGreater(len(xs), 50)
-        self.assertGreater(len(zs), 50)
-        self.assertEqual(len(whole.whole_layout()), 1)
+        self.assertGreaterEqual(len(xs), gen.GRID_N - 2)
+        self.assertGreaterEqual(len(zs), gen.GRID_N - 2)
 
         # Real relief is present in the GLB, not a painted shade.
         ys = {round(p[1], 6) for p in positions(doc, blob)}
@@ -215,9 +227,74 @@ class WoodFloor(unittest.TestCase):
         self.assertIn(round(gen.GROOVE_Y, 6), ys)
         self.assertIn(round(gen.TOP_Y, 6), ys)
 
+    def test_modules_are_separate_objects_and_cover_the_floor(self):
+        """16 independent GLBs, borders ON paver seams, no rotations, no holes."""
+        layout = whole.module_layout()
+        self.assertEqual(len(layout), 16)
+        self.assertEqual(whole.MODULE_N, 4)
+        self.assertEqual(whole.CELLS_PER_MODULE, gen.GRID_N // 4)
+        ms = whole.module_seams()
+        self.assertEqual(len(ms), 5)
+        seams = whole.whole_grid()
+        for k, v in enumerate(ms):
+            self.assertAlmostEqual(v, seams[k * whole.CELLS_PER_MODULE], places=6)
+        self.assertAlmostEqual(ms[0], -whole.H, places=6)
+        self.assertAlmostEqual(ms[-1], whole.H, places=6)
+
+        local_blocks = {}
+        origins = {(m["row"], m["col"]): m for m in layout}
+        counts = []
+        for m in layout:
+            doc, blob = read_glb(ROOT / "Models" / "Floor" / m["name"])
+            extra = doc["nodes"][0]["extras"]
+            self.assertEqual(extra["module"], [m["row"], m["col"]], m["name"])
+            self.assertEqual(extra["modules"], [4, 4], m["name"])
+            self.assertEqual(extra["cells_per_module"], whole.CELLS_PER_MODULE)
+            self.assertAlmostEqual(extra["origin"][0], m["x0"], places=6)
+            self.assertAlmostEqual(extra["origin"][1], m["z0"], places=6)
+            self.assertFalse(extra["continuous"], m["name"])
+            self.assertAlmostEqual(extra["block_pitch"], gen.PITCH, places=6)
+            lo, hi = bounds(doc, blob)
+            self.assertGreaterEqual(lo[0], -1e-5, m["name"])
+            self.assertGreaterEqual(lo[2], -1e-5, m["name"])
+            self.assertLessEqual(hi[0], m["x1"] - m["x0"] + 1e-5, m["name"])
+            self.assertLessEqual(hi[2], m["z1"] - m["z0"] + 1e-5, m["name"])
+            self.assertGreaterEqual(lo[1], gen.BASE_Y - 1e-5, m["name"])
+            _, own = whole.build_module(m)
+            local_blocks[(m["row"], m["col"])] = own
+            self.assertEqual(len(own), extra["block_count"], m["name"])
+            counts.append(len(own))
+        self.assertEqual(sum(counts), len(whole.whole_blocks()))
+        for n in counts:
+            self.assertGreater(n, 0)
+            self.assertLessEqual(n, whole.CELLS_PER_MODULE ** 2)
+
+        # Sampling AFTER applying each module's scene translation: no holes.
+        hps = whole.rounded_square_halfplanes()
+        pitch = seams[1] - seams[0]
+        step = 0.11
+        n = int(2 * whole.H / step)
+        missing = checked = 0
+        for ii in range(n):
+            for jj in range(n):
+                x = -whole.H + (ii + 0.37) * step
+                z = -whole.H + (jj + 0.61) * step
+                if not all(a * x + b * z <= c + 1e-9 for a, b, c in hps):
+                    continue
+                i = min(int((x + whole.H) / pitch), gen.GRID_N - 1)
+                j = min(int((z + whole.H) / pitch), gen.GRID_N - 1)
+                key = (j // whole.CELLS_PER_MODULE, i // whole.CELLS_PER_MODULE)
+                poly = local_blocks[key].get((i, j))
+                m = origins[key]
+                checked += 1
+                if poly is None or not point_in_poly(x - m["x0"], z - m["z0"], poly):
+                    missing += 1
+        self.assertGreater(checked, 20000)
+        self.assertEqual(missing, 0, "hole between separate floor modules")
+
     def test_no_through_gaps_geometry_closes(self):
-        # V-groove: the flat top is inset, the full shared edge is 8 mm lower,
-        # the continuous subfloor is 4 mm below that and ABOVE the gray floor.
+        # V-groove: the flat top is inset, the full shared edge is 10 mm lower,
+        # the continuous subfloor is 2 mm below that and ABOVE the gray floor.
         self.assertAlmostEqual(gen.GROOVE_Y, gen.TOP_Y - gen.GROOVE)
         self.assertLess(gen.BASE_Y, gen.GROOVE_Y)
         self.assertGreater(gen.GROOVE, 0.006)
@@ -264,10 +341,10 @@ class WoodFloor(unittest.TestCase):
                 self.assertAlmostEqual(min(pa), min(qa), delta=1e-6)
                 self.assertAlmostEqual(max(pa), max(qa), delta=1e-6)
                 shared += 1
-        self.assertGreater(shared, 5000)
+        self.assertGreater(shared, len(blocks))   # ~2 per block
 
-        # Point sampling: every point inside the wall boundary is covered by
-        # exactly one block polygon, none is a hole and no block overflows its cell.
+        # Point sampling on the reference mesh: every point inside the wall
+        # boundary is covered by exactly one block polygon, none is a hole.
         hps = whole.rounded_square_halfplanes()
         pitch = seams[1] - seams[0]
         step = 0.11
@@ -305,6 +382,15 @@ class WoodFloor(unittest.TestCase):
                               gen.asset_meta(pitch, blocks))
                 self.assertEqual(out.read_bytes(),
                                  (ROOT / "Models" / "Floor" / name).read_bytes(), name)
+            for m in whole.module_layout():
+                tris, blocks = whole.build_module(m)
+                out = Path(tmp) / m["name"]
+                gen.write_glb(out, tris, m["stem"],
+                              m["x1"] - m["x0"], m["z1"] - m["z0"], False,
+                              whole.module_meta(m, blocks))
+                self.assertEqual(out.read_bytes(),
+                                 (ROOT / "Models" / "Floor" / m["name"]).read_bytes(),
+                                 m["name"])
             tris, blocks = whole.build_whole_floor()
             out = Path(tmp) / whole.WHOLE_NAME
             gen.write_glb(out, tris, "Wood_Floor_Whole", 2 * whole.H, 2 * whole.H,
@@ -348,9 +434,11 @@ class WoodFloor(unittest.TestCase):
                 self.assertLessEqual(max(0.0, ox) * max(0.0, oz), 1e-6,
                                     "%s overlaps %s" % (na, nb))
 
-    def test_main_scene_uses_one_continuous_floor(self):
+    def test_main_scene_uses_16_separate_floor_modules(self):
         text = (ROOT / "main.tscn").read_text()
-        self.assertIn('path="res://Models/Floor/Wood_Floor_Whole.glb" id="13_woodwhole"', text)
+        self.assertNotIn("Wood_Floor_Whole.glb", text)
+        self.assertNotIn("13_woodwhole", text)
+        self.assertNotIn('name="floor_whole"', text)
         for gone in ("floor_center_0", "floor_edge_top_0", "floor_corner_ne"):
             self.assertNotIn('name="%s"' % gone, text)
         parent = re.search(r'\[node name="WoodFloor" type="Node3D" parent="\."[^\]]*\]\n'
@@ -358,17 +446,29 @@ class WoodFloor(unittest.TestCase):
         self.assertIsNotNone(parent)
         self.assertAlmostEqual(float(parent.group(1).split(",")[10]), FLOOR_OFFSET)
 
+        layout = whole.module_layout()
+        by_rid = {m["rid"]: m for m in layout}
+        for m in layout:
+            self.assertIn('path="res://Models/Floor/%s" id="%s"'
+                          % (m["name"], m["rid"]), text)
+
         pattern = re.compile(
             r'\[node name="(\w+)" parent="WoodFloor"[^]]*instance=ExtResource\("([^"]+)"\)\]\n'
             r'transform = Transform3D\(([^)]*)\)')
         found = pattern.findall(text)
-        self.assertEqual(len(found), 1, "scene must have exactly one floor instance")
-        name, rid, values = found[0]
-        self.assertEqual(name, "floor_whole")
-        self.assertEqual(rid, "13_woodwhole")
-        nums = [float(v.strip()) for v in values.split(",")]
-        self.assertEqual(nums[:9], list(gen.ROTATIONS[0]))
-        self.assertEqual(nums[9:], [0.0, 0.0, 0.0])
+        self.assertEqual(len(found), 16, "scene must have 16 separate floor objects")
+        seen = set()
+        for name, rid, values in found:
+            self.assertIn(rid, by_rid, name)
+            m = by_rid[rid]
+            self.assertEqual(name, m["node"])
+            nums = [float(v.strip()) for v in values.split(",")]
+            self.assertEqual(nums[:9], list(gen.ROTATIONS[0]), "no rotations allowed")
+            self.assertAlmostEqual(nums[9], m["x0"], places=5)
+            self.assertAlmostEqual(nums[10], 0.0, places=5)
+            self.assertAlmostEqual(nums[11], m["z0"], places=5)
+            seen.add(rid)
+        self.assertEqual(len(seen), 16)
 
         # The checkerboard Floor mesh is still there (smoke test pairs it with
         # its collider); its top is at y = 0, BELOW the wooden subfloor.
