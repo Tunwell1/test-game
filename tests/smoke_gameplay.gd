@@ -49,6 +49,8 @@ func _run() -> void:
 			has_controller_move = true
 	_check(has_controller_move, "controller movement has a default binding")
 	_check(_visuals_match_colliders(scene), "visual meshes match their collision shapes")
+	_check(_lining_uses_procedural_shader(scene),
+		"all 12 wall-lining meshes use the procedural ShaderMaterial")
 
 	if player == null:
 		_finish()
@@ -129,6 +131,21 @@ func _visuals_match_colliders(scene: Node) -> bool:
 			push_error("Mesh/collider offset on %s" % body_name)
 			return false
 	return checked >= 4
+
+
+func _lining_uses_procedural_shader(scene: Node) -> bool:
+	var found := 0
+	var stack: Array[Node] = [scene]
+	while not stack.is_empty():
+		var node: Node = stack.pop_back()
+		if node is MeshInstance3D and String(node.name).begins_with("Wall_Lining"):
+			var material: Material = (node as MeshInstance3D).material_override
+			if material is ShaderMaterial and (material as ShaderMaterial).shader != null \
+					and String((material as ShaderMaterial).shader.resource_path).ends_with("wall_wood.gdshader"):
+				found += 1
+		for child in node.get_children():
+			stack.append(child)
+	return found == 12
 
 
 func _check(condition: bool, label: String) -> void:
