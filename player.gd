@@ -76,9 +76,8 @@ var air_jumps_used: int = 0
 
 @onready var collision_shape: CollisionShape3D = $CollisionShape3D
 @onready var head: Node3D = $Head
-@onready var camera: Camera3D = $Head/CameraBoom/Camera3D
-@onready var interact_ray: RayCast3D = $Head/CameraBoom/Camera3D/InteractRay
-@onready var camera_boom: SpringArm3D = $Head/CameraBoom
+@onready var camera: Camera3D = $Head/Camera3D
+@onready var interact_ray: RayCast3D = $Head/Camera3D/InteractRay
 @onready var ceiling_check: ShapeCast3D = $CeilingCheck
 @onready var footstep_audio: AudioStreamPlayer3D = $FootstepAudio
 
@@ -155,16 +154,11 @@ func _ready() -> void:
 		collision_shape.shape = collision_shape.shape.duplicate()
 		capsule = collision_shape.shape as CapsuleShape3D
 	
-	if camera_boom:
-		camera_boom.spring_length = 0.6
-	
 	if ceiling_check:
 		ceiling_check.add_exception(self)
 		ceiling_check.enabled = true
 
-	# Камера и луч не должны сталкиваться с телом самого игрока
-	if camera_boom:
-		camera_boom.add_excluded_object(get_rid())
+	# Луч взаимодействия не должен задевать тело самого игрока
 	if interact_ray:
 		interact_ray.add_exception(self)
 		interact_ray.collision_mask = 4 # Layer 3: interactable
@@ -504,8 +498,10 @@ func _process_interaction() -> void:
 		target.call("interact")
 
 func _apply_head_bob(delta: float) -> void:
-	# SpringArm3D сам задаёт позицию камеры, поэтому покачиваем сам CameraBoom
-	var bob_node: Node3D = camera_boom
+	# От первого лица камера стоит прямо в глазах, поэтому покачиваем её саму.
+	var bob_node: Node3D = camera
+	if bob_node == null:
+		return
 	if not bob_enabled:
 		bob_node.position = Vector3.ZERO
 		return

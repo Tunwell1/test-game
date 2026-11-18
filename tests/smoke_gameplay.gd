@@ -40,6 +40,7 @@ func _run() -> void:
 		await physics_frame
 	_check(player != null, "player exists in main scene")
 	_check(_ambient_vfx_ready(player), "warm light and dust motes are attached to the player")
+	_check(_first_person_camera_ready(player), "camera sits at eye level with no spring arm")
 
 	var enemies := get_nodes_in_group("enemies")
 	print("INFO: main scene registers %d enemies" % enemies.size())
@@ -111,6 +112,19 @@ func _run() -> void:
 	_check(float(player.get("health")) == 0.0, "player health is clamped at zero")
 
 	_finish()
+
+
+func _first_person_camera_ready(player: Node) -> bool:
+	if player == null:
+		return false
+	var cam := player.find_child("Camera3D", true, false) as Camera3D
+	var head := player.find_child("Head", true, false) as Node3D
+	if cam == null or head == null or cam.get_parent() != head:
+		return false
+	for node in player.find_children("*", "SpringArm3D", true, false):
+		return false
+	var ray := cam.get_node_or_null("InteractRay") as RayCast3D
+	return ray != null and absf(cam.position.x) < 0.2 and absf(cam.position.z) < 0.2
 
 
 func _ambient_vfx_ready(player: Node) -> bool:

@@ -127,3 +127,16 @@ godot --headless --path . --script res://tests/smoke_gameplay.gd
 
 Smoke-тест проверяет, что оба узла реально создаются у игрока, свет не даёт
 тени, а у пылинок есть материал и материал обработки частиц.
+
+## Камера первого лица
+
+`player.tscn`: `Head -> Camera3D -> InteractRay`. `SpringArm3D` и его
+`spring_length = 0.6` удалены — камера стоит точно в точке глаз, не втягивается
+у стен, а луч взаимодействия начинается там же, где прицел. Покачивание,
+наклон при стрельбе вбок и пружина приземления теперь применяются к самой
+`Camera3D`, а не к узлу-пружине.
+
+```sh
+python3 tests/test_first_person_camera.py -v
+godot --headless --path . --script res://tests/smoke_gameplay.gd
+```
