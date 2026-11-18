@@ -39,6 +39,7 @@ func _run() -> void:
 		await process_frame
 		await physics_frame
 	_check(player != null, "player exists in main scene")
+	_check(_ambient_vfx_ready(player), "warm light and dust motes are attached to the player")
 
 	var enemies := get_nodes_in_group("enemies")
 	print("INFO: main scene registers %d enemies" % enemies.size())
@@ -110,6 +111,18 @@ func _run() -> void:
 	_check(float(player.get("health")) == 0.0, "player health is clamped at zero")
 
 	_finish()
+
+
+func _ambient_vfx_ready(player: Node) -> bool:
+	if player == null:
+		return false
+	var light := player.find_child("WarmLight", true, false) as OmniLight3D
+	var dust := player.find_child("DustMotes", true, false) as GPUParticles3D
+	if light == null or dust == null:
+		return false
+	if light.shadow_enabled or light.omni_range < 1.0:
+		return false
+	return dust.amount >= 8 and dust.draw_pass_1 != null and dust.process_material != null
 
 
 func _visuals_match_colliders(scene: Node) -> bool:

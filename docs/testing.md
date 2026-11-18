@@ -111,3 +111,19 @@ python3 tests/test_wall_corners.py -v
 godot --headless --editor --path . --quit
 godot --headless --path . --script res://tests/smoke_gameplay.gd
 ```
+
+## Атмосферные мелочи у игрока
+
+`player.gd` создаёт кодом два эффекта без внешних ассетов: тёплый `OmniLight3D`
+`WarmLight` у головы (без теней, с очень слабым мерцанием в `_process`) и
+`GPUParticles3D` `DustMotes` на камере — медленные пылинки в объёме 10×6×10 м.
+Все параметры вынесены в группу `Атмосфера` в инспекторе, эффекты можно
+выключить флагами `warm_light_enabled` / `dust_enabled`.
+
+```sh
+python3 tests/test_ambient_vfx.py -v
+godot --headless --path . --script res://tests/smoke_gameplay.gd
+```
+
+Smoke-тест проверяет, что оба узла реально создаются у игрока, свет не даёт
+тени, а у пылинок есть материал и материал обработки частиц.

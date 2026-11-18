@@ -120,9 +120,21 @@ var current_speed_limit: float = 4.5
 @export var sprint_lean_deg: float = 1.5
 @export var sprint_blend_speed: float = 3.0
 @export var speed_ramp: float = 8.0
+
+@export_group("Атмосфера")
+## Тёплый свет у головы: мягко подсвечивает интерьер, без теней.
+@export var warm_light_enabled: bool = true
+@export var warm_light_color: Color = Color(1.0, 0.78, 0.55)
+@export var warm_light_energy: float = 0.55
+@export var warm_light_range: float = 7.0
+## Медленно дрейфующие пылинки вокруг камеры.
+@export var dust_enabled: bool = true
+@export_range(8, 200, 1) var dust_amount: int = 72
 var footstep_timer: float = 0.0
 var step_streams: Dictionary = {}
 var land_stream: AudioStreamWAV = null
+var _warm_light: OmniLight3D = null
+var _vfx_time: float = 0.0
 
 func _ready() -> void:
 
@@ -173,6 +185,8 @@ func _ready() -> void:
 		land_stream = _generate_footstep_wav(90.0, 0.22, 18.0, 0.5, 0.85)
 		footstep_audio.stream = step_streams[Stance.STANDING]
 
+	_setup_ambient_vfx()
+
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -181,6 +195,81 @@ func _unhandled_input(event: InputEvent) -> void:
 		rotate_y(-event.relative.x * mouse_sensitivity)
 		head.rotate_x(-event.relative.y * mouse_sensitivity)
 		head.rotation.x = clampf(head.rotation.x, deg_to_rad(-89.0), deg_to_rad(89.0))
+
+func _process(delta: float) -> void:
+	# Мерцание очень слабое: свет должен «дышать», а не мигать как лампочка.
+	_vfx_time += delta
+	if _warm_light != null:
+		var flicker := (1.0 + 0.035 * sin(_vfx_time * 6.7)
+			+ 0.02 * sin(_vfx_time * 13.3 + 1.7))
+		_warm_light.light_energy = warm_light_energy * flicker
+
+
+func _setup_ambient_vfx() -> void:
+	if warm_light_enabled:
+		var light := OmniLight3D.new()
+		light.name = "WarmLight"
+		light.light_color = warm_light_color
+		light.light_energy = warm_light_energy
+		light.omni_range = warm_light_range
+		light.omni_attenuation = 1.6
+		light.shadow_enabled = false
+		head.add_child(light)
+		_warm_light = light
+
+	if not dust_enabled or camera == null:
+		return
+
+	var particles := GPUParticles3D.new()
+	particles.name = "DustMotes"
+	particles.amount = dust_amount
+	particles.lifetime = 12.0
+	particles.preprocess = 8.0
+	particles.local_coords = false
+	particles.visibility_aabb = AABB(Vector3(-10.0, -10.0, -10.0), Vector3(20.0, 20.0, 20.0))
+
+	var process := ParticleProcessMaterial.new()
+	process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	process.emission_box_extents = Vector3(5.0, 3.0, 5.0)
+	process.direction = Vector3(0.0, 0.2, 0.0)
+	process.spread = 180.0
+	process.initial_velocity_min = 0.015
+	process.initial_velocity_max = 0.055
+	process.gravity = Vector3(0.0, 0.008, 0.0)
+	process.turbulence_enabled = true
+	process.turbulence_noise_strength = 0.18
+	process.turbulence_noise_scale = 0.9
+	process.turbulence_noise_speed = Vector3(0.12, 0.12, 0.12)
+	process.scale_min = 0.5
+	process.scale_max = 1.3
+	process.color = Color(1.0, 0.94, 0.82, 0.28)
+	particles.process_material = process
+
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.022, 0.022)
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	material.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	material.vertex_color_use_as_albedo = true
+	material.albedo_texture = _dust_dot_texture()
+	quad.material = material
+	particles.draw_pass_1 = quad
+	camera.add_child(particles)
+
+
+func _dust_dot_texture() -> ImageTexture:
+	var size := 32
+	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
+	var center := Vector2(float(size - 1) * 0.5, float(size - 1) * 0.5)
+	for y in size:
+		for x in size:
+			var d := Vector2(float(x), float(y)).distance_to(center) / center.x
+			var a := clampf(1.0 - d, 0.0, 1.0)
+			img.set_pixel(x, y, Color(1.0, 1.0, 1.0, a * a))
+	return ImageTexture.create_from_image(img)
+
 
 func _physics_process(delta: float) -> void:
 	if is_dead:
