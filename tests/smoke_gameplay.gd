@@ -32,6 +32,11 @@ func _run() -> void:
 	await physics_frame
 
 	var player := scene.find_child("Player", true, false)
+	var hud := scene.find_child("HUD", true, false)
+	if hud != null:
+		var school_layer = hud.get("school_screen")
+		_check(school_layer != null and school_layer.mouse_filter == Control.MOUSE_FILTER_STOP,
+			"school choice accepts mouse input")
 	if player != null:
 		var magic_book = player.get("magic_book")
 		if magic_book != null and int(magic_book.get("primary_school")) == -1:
