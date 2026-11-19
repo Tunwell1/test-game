@@ -105,5 +105,9 @@ PY
 [ $? -ne 0 ] && status=1
 
 echo
+echo "== 5. Семантика шейдеров (varying, DEPTH, texture) =="
+python3 Tools/check_shaders.py || status=1
+
+echo
 if [ "$status" -eq 0 ]; then echo "ИТОГ: проверки пройдены"; else echo "ИТОГ: есть проблемы"; fi
 exit $status

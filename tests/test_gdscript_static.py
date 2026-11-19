@@ -57,6 +57,12 @@ class GdScriptStatic(unittest.TestCase):
         finally:
             target.write_text(original, encoding="utf-8")
 
+    def test_shader_semantics(self):
+        """Шейдеры из строк GDScript: varying, DEPTH, texture(), вызовы."""
+        result = self._run(sys.executable, str(TOOLS / "check_shaders.py"))
+        self.assertEqual(result.returncode, 0,
+                         "проблемы в шейдерах:\n" + result.stdout + result.stderr)
+
     def test_shader_macros_declared(self):
         """Godot 4 не знает SCREEN_TEXTURE без uniform с hint_screen_texture."""
         for path in ROOT.glob("*.gd"):

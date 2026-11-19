@@ -65,8 +65,11 @@ class RenderSharpnessTests(unittest.TestCase):
         # Ни снаряд, ни удар не излучают свет, кроме огня.
         text = PROJECTILE.read_text(encoding="utf-8")
         self.assertIn('func _emits_light() -> bool:', text)
-        self.assertIn('return visual == "fire" or visual == "lava"', text)
+        # Решение о свете принимает SpellVisuals: светится только огонь.
+        self.assertIn("return SpellVisuals.emits_light(visual)", text)
         self.assertIn('var impact_light := visual == "fire"', text)
+        visuals = (PROJECTILE.parent / "spell_visuals.gd").read_text(encoding="utf-8")
+        self.assertIn("return kind_of(visual) == KIND_FIRE", visuals)
         self.assertIn("if flash != null:", text)
         # В configure свет создаётся только через проверку _emits_light().
         self.assertIn("if _emits_light():", text)

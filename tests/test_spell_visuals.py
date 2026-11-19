@@ -12,6 +12,7 @@ PROJECTILE = ROOT / "spell_projectile.gd"
 HUD = ROOT / "hud.gd"
 PLAYER = ROOT / "player.gd"
 SMOKE = ROOT / "tests" / "smoke_gameplay.gd"
+VISUALS = ROOT / "spell_visuals.gd"
 
 
 class SpellVisualTests(unittest.TestCase):
@@ -34,16 +35,16 @@ class SpellVisualTests(unittest.TestCase):
         # Пул живёт в текущей сцене, а не под игроком: он общий для всех кастов.
         self.assertIn("SpellPool.get_or_create(player.get_tree())", text)
 
-    def test_projectile_has_four_distinct_shapes(self):
+    def test_four_schools_have_distinct_geometry(self):
+        """Форму задаёт геометрия, а не общий октаэдр с другой наклейкой."""
         text = PROJECTILE.read_text(encoding="utf-8")
         self.assertIn("func _build_mesh() -> Mesh:", text)
-        self.assertIn('"fire":', text)
-        self.assertIn('"wind":', text)
-        self.assertIn('"water":', text)
-        self.assertIn('"earth":', text)
-        self.assertIn("func _octahedron(", text)
-        self.assertIn("func _ribbon(", text)
-        self.assertIn("var cap := CapsuleMesh.new()", text)
+        self.assertIn("return SpellVisuals.body_mesh(visual)", text)
+        visuals = VISUALS.read_text(encoding="utf-8")
+        for fn in ("_flame_spindle(", "_spiral_ribbons(", "_droplet(", "_rock("):
+            self.assertIn("static func %s" % fn, visuals)
+        self.assertIn("const KIND_FIRE := 0", visuals)
+        self.assertIn("const KIND_EARTH := 3", visuals)
 
     def test_projectile_has_trails_and_motion(self):
         text = PROJECTILE.read_text(encoding="utf-8")
@@ -173,22 +174,18 @@ class SpellVisualTests(unittest.TestCase):
         self.assertIn("SpellAudio.impact_stream(visual)", projectile)
         self.assertIn('"ImpactAudio"', projectile)
 
-    def test_shader_bodies(self):
+    def test_each_school_has_its_own_material(self):
+        """Общий шейдер на четыре разные материи — источник всех жалоб."""
+        visuals = VISUALS.read_text(encoding="utf-8")
+        for fn in ("_flame_shader(", "_air_shader(", "_liquid_shader(",
+                   "_stone_shader("):
+            self.assertIn("static func %s" % fn, visuals)
         text = PROJECTILE.read_text(encoding="utf-8")
-        self.assertIn("static var _spell_shader: Shader = null", text)
-        self.assertIn("shader.code = \"\"\"", text)
-        self.assertIn("shader_type spatial;", text)
-        # Кромка силуэта — плавный rim, а не ступенька.
-        self.assertIn("float rim = pow(1.0 - facing, 2.5);", text)
-        # Тело обязано получать свет сцены: unshaded ломал всё.
-        self.assertNotIn("render_mode unshaded", text)
-        self.assertIn("render_mode blend_mix, cull_disabled, depth_draw_opaque;", text)
-        self.assertIn("ROUGHNESS = 0.04;", text)
-        self.assertNotIn("noise3(", text)
-        self.assertIn("uniform float mode = 0.0;", text)
-        self.assertIn("var modes := {\"fire\": 0.0, \"wind\": 1.0, \"water\": 2.0}", text)
         self.assertIn("func _body_material() -> Material:", text)
-        self.assertIn("shader_mat.set_shader_parameter(\"tint\"", text)
+        self.assertIn("return SpellVisuals.body_material(visual, tint)", text)
+        # Старого единого шейдера с mode=0/1/2 больше нет.
+        self.assertNotIn("var modes := {\"fire\": 0.0", text)
+        self.assertNotIn("render_mode blend_mix, cull_disabled, depth_draw_opaque;", text)
 
     def test_smoke_and_turbulence(self):
         text = PROJECTILE.read_text(encoding="utf-8")
@@ -198,7 +195,7 @@ class SpellVisualTests(unittest.TestCase):
         self.assertIn("process.scale_curve = _scale_curve(0.7, 2.4)", text)
         self.assertIn("process.turbulence_enabled = true", text)
         self.assertIn("process.turbulence_noise_speed = Vector3(0.8, 0.8, 0.8)", text)
-        self.assertIn("process.turbulence_noise_strength = 0.4 if kind == \"spark\"", text)
+        self.assertIn("process.turbulence_noise_strength = 0.4 if kind == \"spark\" else 0.6", text)
 
     def test_heavy_hitstop(self):
         text = PROJECTILE.read_text(encoding="utf-8")
@@ -218,17 +215,85 @@ class SpellVisualTests(unittest.TestCase):
         self.assertIn("SpellAudio.flight_stream(visual)", projectile)
         self.assertIn('"SpellFlightAudio"', projectile)
 
-    def test_fire_has_volume(self):
+    def test_fire_looks_like_fire_not_a_lamp(self):
+        """Огонь светится в ядре, а не по контуру силуэта."""
+        visuals = VISUALS.read_text(encoding="utf-8")
+        flame = visuals.split("static func _flame_shader()", 1)[1] \
+            .split("static func _air_shader()", 1)[0]
+        # Адвекция вдоль оси с двумя фазами и crossfade.
+        self.assertIn("fbm3(", flame)
+        self.assertIn("float phase = fract(TIME * speed * 0.55);", flame)
+        self.assertIn("mix(d0, d1, w)", flame)
+        # Эрозия по высоте: язык рвётся к хвосту.
+        self.assertIn("density -= axis * 0.55;", flame)
+        # Четыре ступени ramp и намеренно холодная кайма.
+        self.assertIn("vec3 body = tint.rgb * 0.45;", flame)
+        self.assertIn("vec3 core = vec3(1.0, 0.96, 0.86);", flame)
+        self.assertIn("vec3 cool =", flame)
+        # Яркость живёт в ядре (источник света), а не на кромке силуэта.
+        self.assertIn("EMISSION = col * pow(heat, 1.35)", flame)
+        self.assertNotIn("pow(1.0 - facing, 2.5)", flame)
         text = PROJECTILE.read_text(encoding="utf-8")
-        self.assertIn("func _fire_body() -> ArrayMesh:", text)
-        self.assertIn("_append_octahedron(", text)
-        self.assertIn("func _make_flames() -> GPUParticles3D:", text)
-        # Шлейф пламени остаётся в мире и всплывает медленно.
-        flames = text.split("func _make_flames()", 1)[1].split("func _make_smoke()", 1)[0]
-        self.assertIn("local_coords = false", flames)
-        self.assertIn("gravity = Vector3(0.0, 1.1, 0.0)", flames)
-        # Свет огня отбрасывает тень.
         self.assertIn("_light.shadow_enabled = true", text)
+
+    def test_wind_is_refraction_not_particles(self):
+        """Ветер — это искажение фона, а не облако частиц."""
+        visuals = VISUALS.read_text(encoding="utf-8")
+        air = visuals.split("static func _air_shader()", 1)[1] \
+            .split("static func _liquid_shader()", 1)[0]
+        self.assertIn("hint_screen_texture", air)
+        self.assertIn("texture(screen_tex, SCREEN_UV + offset)", air)
+        self.assertIn("vec2 offset = (vec2(n, ripple) - 0.5) * distortion;", air)
+        # Плёнка почти невидима: альфа много меньше единицы.
+        self.assertIn("ALPHA = clamp(0.10 + edge * 0.30", air)
+        # У воздуха нет собственного свечения.
+        self.assertNotIn("EMISSION = col", air)
+        text = PROJECTILE.read_text(encoding="utf-8")
+        trail = text.split('"wind":\n\t\t\t#', 1)
+        self.assertTrue(trail, "след ветра должен быть описан с комментарием")
+        # Частиц ветра мало: образ держит тело, а не они.
+        self.assertIn("particles.amount = 10", text)
+
+    def test_water_is_transparent_liquid(self):
+        """Вода: преломление, fresnel и поглощение по толщине, не заливка."""
+        visuals = VISUALS.read_text(encoding="utf-8")
+        water = visuals.split("static func _liquid_shader()", 1)[1] \
+            .split("static func _stone_shader()", 1)[0]
+        self.assertIn("hint_screen_texture", water)
+        self.assertIn("float fresnel = pow(1.0 - facing, 4.0);", water)
+        # Закон Бера — Ламберта: цвет гасится по толщине слоя.
+        self.assertIn("vec3 transmittance = exp(-tint.rgb * absorption", water)
+        self.assertIn("float thickness = thickest * sqrt(max(0.0, 1.0 - radial", water)
+        # v_local обязан присваиваться в vertex, иначе толщина нулевая.
+        self.assertIn("void vertex() {", water)
+        self.assertIn("v_local = VERTEX;", water)
+        self.assertIn("ROUGHNESS = 0.03;", water)
+        # Никакой постоянной альфы-заливки.
+        self.assertNotIn("ALPHA = 0.55 + rim * 0.4;", water)
+
+    def test_earth_is_hard_not_blurry(self):
+        """Камень: фасетки и матовый материал, а не растущая клякса пыли."""
+        visuals = VISUALS.read_text(encoding="utf-8")
+        stone = visuals.split("static func _stone_shader()", 1)[1]
+        self.assertIn("float crevice = smoothstep(0.62, 0.78", stone)
+        self.assertIn("ROUGHNESS = 0.94", stone)
+        self.assertNotIn("EMISSION", stone)
+        text = PROJECTILE.read_text(encoding="utf-8")
+        # Пыль больше не растёт в 2.6 раза — именно это «мылило» камень.
+        self.assertNotIn("_scale_curve(0.6, 2.6)", text)
+        self.assertIn("particles.amount = 12", text)
+        # Осколки — главный элемент удара камня, их больше и они быстрее.
+        self.assertIn('_make_burst(16, Color(0.46, 0.39, 0.32, 0.95)', text)
+
+    def test_only_fire_glows_on_surface(self):
+        """Пятно света после удара — физически только у огня."""
+        text = PROJECTILE.read_text(encoding="utf-8")
+        pool = text.split("func _spawn_glow_pool(", 1)[1] \
+            .split("func _heavy_hitstop", 1)[0]
+        self.assertIn("if not _emits_light():", pool)
+        self.assertIn("return", pool)
+        visuals = VISUALS.read_text(encoding="utf-8")
+        self.assertIn("return kind_of(visual) == KIND_FIRE", visuals)
 
     def test_screen_post_process(self):
         fx = (ROOT / "spell_screen_fx.gd").read_text(encoding="utf-8")

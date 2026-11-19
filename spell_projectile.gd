@@ -135,7 +135,7 @@ func configure() -> void:
 ## Светится только огонь — по названию школы, а не по конкретному заклинанию,
 ## чтобы производные школы (лава, молния) могли светиться, когда появятся.
 func _emits_light() -> bool:
-	return visual == "fire" or visual == "lava" or visual == "lightning"
+	return SpellVisuals.emits_light(visual)
 
 ## Пул переиспользует снаряд под другую школу: тело и след пересобираются,
 ## материалы создаются один раз за переключение, а не на каждый каст.
@@ -169,16 +169,16 @@ func build_visuals() -> void:
 	# Снаряд не появляется готовым: первые 60 мс он «выстреливается» из руки,
 	# иначе глаз читает мгновенную подмену объекта, а не бросок.
 	_mesh.scale = Vector3.ONE * 0.35
-	if visual == "water":
-		# CapsuleMesh длинной осью идёт по Y — поворачиваем её по полёту.
-		_mesh.rotation.x = PI * 0.5
+	# Все тела строятся вдоль +Z — это ось полёта, поворачивать не нужно.
 	add_child(_mesh)
 	_trail = _make_trail()
 	if _trail != null:
 		add_child(_trail)
 	if _emits_light():
+		# Свет ставится от огня, а не «на» огне: оранжевый, с тенями, чтобы
+		# стены и пол реагировали. Само пламя светится только в ядре.
 		_light = OmniLight3D.new()
-		_light.light_color = tint
+		_light.light_color = Color(tint.r, tint.g * 0.72, tint.b * 0.45)
 		_light.omni_range = 5.4
 		_light.light_energy = 2.6
 		_light.omni_attenuation = 1.4
@@ -199,9 +199,8 @@ func apply_tint(new_tint: Color, new_visual: String = "") -> void:
 	if new_visual != "":
 		rebuild_for(new_visual)
 	if _mesh_mat is ShaderMaterial:
-		var mat := _mesh_mat as ShaderMaterial
-		var alpha := 1.0 if visual == "fire" else 0.72
-		mat.set_shader_parameter("tint", Color(tint.r, tint.g, tint.b, alpha))
+		# У каждой школы свой шейдер, но параметр tint есть у всех.
+		(_mesh_mat as ShaderMaterial).set_shader_parameter("tint", tint)
 	elif _mesh_mat is StandardMaterial3D:
 		(_mesh_mat as StandardMaterial3D).albedo_color = tint
 	# Частицы наследуют цвет через вершинный цвет материала — нужно обновить
@@ -271,204 +270,20 @@ func _recycle() -> void:
 			pool.call("release", self)
 			return
 	queue_free()
-
 # --- Форма снаряда ---------------------------------------------------------
 
+## Геометрия и материал тела живут в SpellVisuals: у огня, воздуха, воды и
+## камня настолько разная физика, что общий шейдер для них — источник всех
+## прошлых жалоб («светится», «краска», «мыло»).
 func _build_mesh() -> Mesh:
-	# Огонь — не один октаэдр: ядро плюс два лепестка сзади. Одно тело всегда
-	# читается как наклейка, а наложение трёх объёмов даёт «клубок пламени».
-	if visual == "fire":
-		return _fire_body()
-	match visual:
-		"wind":
-			return _ribbon(0.16, 0.55, 1.5)
-		"water":
-			var cap := CapsuleMesh.new()
-			cap.radius = 0.11
-			cap.height = 0.34
-			cap.radial_segments = 10
-			cap.rings = 6
-			return cap
-		"earth":
-			return _octahedron(Vector3(0.19, 0.19, 0.19), 0.0)
-	var fallback := SphereMesh.new()
-	fallback.radius = 0.15
-	fallback.height = 0.3
-	return fallback
-
-## Огненное тело: ядро + два вытянутых лепестка, сросшихся в комок.
-func _fire_body() -> ArrayMesh:
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	_append_octahedron(st, Vector3(0.15, 0.19, 0.15), 0.10, Vector3.ZERO)
-	_append_octahedron(st, Vector3(0.10, 0.26, 0.10), 0.16, Vector3(0.0, 0.0, 0.10))
-	_append_octahedron(st, Vector3(0.13, 0.12, 0.13), 0.12, Vector3(0.0, 0.03, -0.09))
-	st.generate_normals()
-	return st.commit()
-
-func _append_octahedron(st: SurfaceTool, size: Vector3, jitter: float, offset: Vector3) -> void:
-	var pts := [
-		Vector3(size.x, 0.0, 0.0), Vector3(-size.x, 0.0, 0.0),
-		Vector3(0.0, size.y, 0.0), Vector3(0.0, -size.y, 0.0),
-		Vector3(0.0, 0.0, size.z), Vector3(0.0, 0.0, -size.z),
-	]
-	if jitter > 0.0:
-		for i in pts.size():
-			var p: Vector3 = pts[i]
-			pts[i] = p * (1.0 + sin(float(i) * 12.9898 + offset.z * 7.0) * jitter)
-	var faces := [
-		[2, 0, 4], [2, 4, 1], [2, 1, 5], [2, 5, 0],
-		[3, 4, 0], [3, 1, 4], [3, 5, 1], [3, 0, 5],
-	]
-	for f in faces:
-		st.add_vertex(pts[int(f[0])] + offset)
-		st.add_vertex(pts[int(f[1])] + offset)
-		st.add_vertex(pts[int(f[2])] + offset)
-
-func _octahedron(size: Vector3, jitter: float) -> ArrayMesh:
-	var pts := [
-		Vector3(size.x, 0.0, 0.0), Vector3(-size.x, 0.0, 0.0),
-		Vector3(0.0, size.y, 0.0), Vector3(0.0, -size.y, 0.0),
-		Vector3(0.0, 0.0, size.z), Vector3(0.0, 0.0, -size.z),
-	]
-	if jitter > 0.0:
-		for i in pts.size():
-			var p: Vector3 = pts[i]
-			pts[i] = p * (1.0 + sin(float(i) * 12.9898) * jitter)
-	var faces := [
-		[2, 0, 4], [2, 4, 1], [2, 1, 5], [2, 5, 0],
-		[3, 4, 0], [3, 1, 4], [3, 5, 1], [3, 0, 5],
-	]
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for f in faces:
-		st.add_vertex(pts[int(f[0])])
-		st.add_vertex(pts[int(f[1])])
-		st.add_vertex(pts[int(f[2])])
-	st.generate_normals()
-	return st.commit()
-
-func _ribbon(width: float, radius: float, arc: float) -> ArrayMesh:
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var segs := 8
-	for i in segs:
-		var a0 := -arc * 0.5 + arc * float(i) / float(segs)
-		var a1 := -arc * 0.5 + arc * float(i + 1) / float(segs)
-		var p0 := Vector3(sin(a0) * radius, cos(a0) * radius - radius, 0.0)
-		var p1 := Vector3(sin(a1) * radius, cos(a1) * radius - radius, 0.0)
-		var t0 := Vector3(cos(a0), -sin(a0), 0.0).normalized()
-		var t1 := Vector3(cos(a1), -sin(a1), 0.0).normalized()
-		var n0 := Vector3(-t0.y, t0.x, 0.0) * (width * 0.5)
-		var n1 := Vector3(-t1.y, t1.x, 0.0) * (width * 0.5)
-		var a := p0 - n0
-		var b := p0 + n0
-		var c := p1 + n1
-		var d := p1 - n1
-		st.add_vertex(a); st.add_vertex(b); st.add_vertex(c)
-		st.add_vertex(a); st.add_vertex(c); st.add_vertex(d)
-		st.add_vertex(c); st.add_vertex(b); st.add_vertex(a)
-		st.add_vertex(d); st.add_vertex(c); st.add_vertex(a)
-	st.generate_normals()
-	return st.commit()
-
-## Один общий шейдер для «живых» школ: 0 — огонь, 1 — ветер, 2 — вода.
-## Камень остаётся на StandardMaterial3D — ему нужен матовый шероховатый камень.
-static var _spell_shader: Shader = null
-
-static func _shader() -> Shader:
-	if _spell_shader != null:
-		return _spell_shader
-	var shader := Shader.new()
-	shader.code = """
-shader_type spatial;
-// ВАЖНО: никакого unshaded. Прошлая версия рисовала снаряд поверх мира и
-// подделывала свет ручным ламбертом — поэтому любая магия выглядела наклейкой.
-// Теперь тело получает настоящий свет сцены, тени и блики.
-render_mode blend_mix, cull_disabled, depth_draw_opaque;
-
-uniform vec4 tint : source_color = vec4(1.0, 1.0, 1.0, 1.0);
-uniform float mode = 0.0;          // 0 огонь, 1 ветер, 2 вода
-uniform float speed = 1.0;
-uniform float warmth = 1.0;        // насколько тело «раскалено»
-
-varying vec3 v_local;
-
-void vertex() {
-	v_local = VERTEX;
-	if (mode < 0.5) {
-		// Пламя дышит: смещение по нормали на низкой частоте.
-		VERTEX += NORMAL * sin(TIME * speed * 5.0 + VERTEX.y * 9.0) * 0.012;
-	} else if (mode < 1.5) {
-		// Ветер: лента изгибается, а не мерцает полосами.
-		VERTEX.z += sin(VERTEX.x * 14.0 + TIME * speed * 4.0) * 0.02;
-	}
-}
-
-void fragment() {
-	float facing = abs(dot(normalize(NORMAL), normalize(VIEW)));
-	// Мягкая кромка силуэта: не ступенька, а плавный переход.
-	float rim = pow(1.0 - facing, 2.5);
-
-	if (mode < 0.5) {
-		// Огонь: раскалённое ядро + эмиссия > 1 уходит в узкий glow.
-		// ALBEDO держим тёмным, чтобы тело читалось на фоне собственного света.
-		float heat = mix(0.55, 1.0, warmth);
-		ALBEDO = tint.rgb * 0.35;
-		EMISSION = mix(tint.rgb, vec3(2.4, 1.5, 0.5), rim) * heat * 1.8;
-		ALPHA = 1.0;
-	} else if (mode < 1.5) {
-		// Ветер — почти невидимый воздух: тонкая плёнка, ловящая свет.
-		ALBEDO = tint.rgb;
-		ROUGHNESS = 0.85;
-		METALLIC = 0.0;
-		ALPHA = 0.28 + rim * 0.35;
-	} else {
-		// Вода: гладкая, прозрачная, с сильным бликом — она обязана ловить
-		// солнце и окружение. Это и есть «дорогой» вид без всякого свечения.
-		ALBEDO = tint.rgb * 0.9;
-		ROUGHNESS = 0.04;
-		METALLIC = 0.0;
-		SPECULAR = 0.85;
-		// В глубине капли цвет темнее — объём читается за счёт толщины.
-		ALPHA = 0.55 + rim * 0.4;
-	}
-}
-"""
-	_spell_shader = shader
-	return shader
+	return SpellVisuals.body_mesh(visual)
 
 func _body_material() -> Material:
-	var modes := {"fire": 0.0, "wind": 1.0, "water": 2.0}
-	if modes.has(visual):
-		var shader_mat := ShaderMaterial.new()
-		shader_mat.shader = _shader()
-		# Огонь — единственный источник света среди тел снарядов.
-		shader_mat.set_shader_parameter("tint", tint)
-		shader_mat.set_shader_parameter("mode", float(modes[visual]))
-		shader_mat.set_shader_parameter("warmth", 1.0)
-		shader_mat.set_shader_parameter("speed",
-			1.6 if visual == "wind" else 1.0)
-		return shader_mat
-	# Земля: обычный освещённый камень. Ключевое — он получает свет сцены
-	# и отбрасывает тень; никакой эмиссии и никакого unshaded.
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = tint
-	mat.roughness = 0.92
-	mat.metallic = 0.0
-	mat.metallic_specular = 0.12
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	# Тёплый оттенок в тенях: камень не должен проваливаться в чёрный.
-	mat.rim_enabled = true
-	mat.rim = 0.25
-	mat.rim_tint = 0.4
-	return mat
+	return SpellVisuals.body_material(visual, tint)
 
-## Частицы — это материя, а не голограммы. Аддитивное свечение разрешено
-## только огню: искры пламени физически излучают свет. Капли воды, пыль,
-## осколки камня и полосы ветра свет НЕ излучают — они либо просвечивают,
-## либо рассеивают его, поэтому рисуются обычной альфой с освещением.
-## HDR-ядро (> 1.0) оставлено только огню: без него glow нечего показывать.
+
+## Частицы — вторичный слой, а не носитель образа. Для ветра и земли их роль
+## теперь мала: воздух показывает преломление, камень — геометрия.
 const ENERGY_PARTICLES := ["spark"]
 
 static func particle_material(kind: String, color: Color) -> StandardMaterial3D:
@@ -549,18 +364,23 @@ func _make_trail() -> GPUParticles3D:
 	match visual:
 		"fire":
 			kind = "spark"
-			base_size = 0.22
+			base_size = 0.20
 		"wind":
+			# Ветер — это в первую очередь преломление в теле. Частицы здесь
+			# не изображают воздух, а показывают, что поток несёт: пыль,
+			# которую он подхватил по дороге.
 			kind = "streak"
-			base_size = 0.28
+			base_size = 0.14
 		"water":
 			# Не «искры воды», а разлетающиеся брызги: мягкие капли.
 			kind = "droplet"
-			base_size = 0.16
+			base_size = 0.14
 		"earth":
-			# Не осколки-искры, а пыль: мелкая, матовая, оседает вниз.
+			# Пыль — только вторичный слой. Образ камня держит геометрия,
+			# поэтому частиц мало и они мелкие: прошлая версия размывала
+			# силуэт в облако.
 			kind = "soft"
-			base_size = 0.34
+			base_size = 0.18
 
 	var quad := QuadMesh.new()
 	quad.size = Vector2(base_size, base_size)
@@ -578,12 +398,12 @@ func _make_trail() -> GPUParticles3D:
 			process.initial_velocity_max = 1.2
 			process.gravity = Vector3(0.0, 1.5, 0.0)
 		"wind":
-			particles.amount = 18
-			particles.lifetime = 0.45
+			particles.amount = 10
+			particles.lifetime = 0.4
 			process.direction = Vector3(0.0, 0.0, 1.0)
-			process.spread = 18.0
-			process.initial_velocity_min = 0.8
-			process.initial_velocity_max = 1.8
+			process.spread = 12.0
+			process.initial_velocity_min = 1.2
+			process.initial_velocity_max = 2.4
 			process.gravity = Vector3.ZERO
 		"water":
 			particles.amount = 34
@@ -595,26 +415,31 @@ func _make_trail() -> GPUParticles3D:
 			# в воздухе и читаются как светящийся шлейф.
 			process.gravity = Vector3(0.0, -6.0, 0.0)
 		"earth":
-			particles.amount = 24
-			particles.lifetime = 1.0
+			# Мало пыли, короткая жизнь: облако не должно закрывать силуэт.
+			particles.amount = 12
+			particles.lifetime = 0.45
 			process.direction = Vector3(0.0, 0.4, 1.0)
-			process.spread = 70.0
-			process.initial_velocity_min = 0.1
-			process.initial_velocity_max = 0.5
-			process.gravity = Vector3(0.0, -0.6, 0.0)
+			process.spread = 50.0
+			process.initial_velocity_min = 0.15
+			process.initial_velocity_max = 0.45
+			process.gravity = Vector3(0.0, -1.4, 0.0)
 	process.scale_min = 0.55
-	process.scale_max = 1.35
+	process.scale_max = 1.25
 	process.color_ramp = _fade_ramp(0.85)
-	if visual == "earth":
-		# Пыль расходится и размывается, а не съёживается в точку.
-		process.scale_curve = _scale_curve(0.6, 2.6)
-	elif visual == "water":
-		process.scale_curve = _scale_curve(1.0, 1.2)
-	else:
-		process.scale_curve = _scale_curve(1.0, 0.3)
+	match visual:
+		"earth":
+			# Пыль чуть расходится, но не в 2.6 раза: рост в разы и был
+			# причиной «всё размыто».
+			process.scale_curve = _scale_curve(0.7, 1.35)
+		"water":
+			process.scale_curve = _scale_curve(1.0, 1.1)
+		"wind":
+			process.scale_curve = _scale_curve(1.0, 0.6)
+		_:
+			process.scale_curve = _scale_curve(1.0, 0.3)
 	if visual == "fire" or visual == "wind":
 		process.turbulence_enabled = true
-		process.turbulence_noise_strength = 0.35 if visual == "fire" else 0.5
+		process.turbulence_noise_strength = 0.35 if visual == "fire" else 0.8
 		process.turbulence_noise_scale = 1.2
 		process.turbulence_noise_speed = Vector3(0.8, 0.8, 0.8)
 	particles.process_material = process
@@ -806,11 +631,15 @@ func _spawn_impact(body: Node3D, normal: Vector3 = Vector3.ZERO) -> void:
 			fx.add_child(_make_burst(34, Color(1.0, 0.55, 0.15, 0.9), 0.6, 1.8,
 				0.7, 0.18, Vector3(0.0, 1.8, 0.0), 40.0, "spark"))
 		"wind":
-			ring_color = Color(0.80, 0.92, 1.0)
-			ring_life = 0.4
-			ring_scale = 4.2
-			fx.add_child(_make_burst(34, Color(0.85, 0.96, 1.0, 0.7), 1.4, 3.0,
-				0.45, 0.24, Vector3.ZERO, 180.0, "streak"))
+			# Порыв не светится: он срывает пыль с поверхности и расшвыривает
+			# её кольцом. Образ ветра держит само тело (преломление).
+			ring_color = Color(0.62, 0.60, 0.55)
+			ring_life = 0.45
+			ring_scale = 5.0
+			fx.add_child(_make_burst(26, Color(0.58, 0.55, 0.50, 0.5), 1.6, 3.4,
+				0.5, 0.16, Vector3(0.0, 0.4, 0.0), 180.0, "soft"))
+			fx.add_child(_make_burst(16, Color(0.66, 0.63, 0.58, 0.65), 1.2, 2.6,
+				0.35, 0.12, Vector3.ZERO, 180.0, "streak"))
 		"water":
 			ring_color = Color(0.45, 0.62, 0.78)
 			ring_life = 0.5
@@ -823,15 +652,15 @@ func _spawn_impact(body: Node3D, normal: Vector3 = Vector3.ZERO) -> void:
 				fx.add_child(_make_burst(22, Color(0.92, 0.96, 1.0, 0.45), 0.3, 0.9,
 					0.7, 0.22, Vector3(0.0, 1.2, 0.0), 60.0, "soft"))
 		"earth":
-			ring_color = Color(0.62, 0.52, 0.40)
-			ring_life = 0.7
+			ring_color = Color(0.52, 0.46, 0.38)
+			ring_life = 0.55
 			ring_scale = 2.0
-			flash_energy = 2.0
-			# Пыль: расширяющееся облако у пола, без светящихся искр.
-			fx.add_child(_make_burst(26, Color(0.55, 0.47, 0.38, 0.55), 0.2, 0.8,
-				1.4, 0.42, Vector3(0.0, -1.6, 0.0), 90.0, "soft"))
-			fx.add_child(_make_burst(14, Color(0.48, 0.40, 0.32, 0.9), 0.6, 1.6,
-				0.8, 0.14, Vector3(0.0, -3.0, 0.0), 50.0, "shard"))
+			# Пыль оседает быстро и не растёт: облако не должно съедать силуэт.
+			fx.add_child(_make_burst(18, Color(0.50, 0.44, 0.36, 0.45), 0.2, 0.7,
+				0.6, 0.24, Vector3(0.0, -2.4, 0.0), 80.0, "soft"))
+			# Осколки — главный элемент удара камня: жёсткие, летят по делу.
+			fx.add_child(_make_burst(16, Color(0.46, 0.39, 0.32, 0.95), 1.0, 2.6,
+				1.1, 0.10, Vector3(0.0, -3.4, 0.0), 45.0, "shard"))
 
 	# Вспышка света в точке удара — только у огня.
 	var flash: OmniLight3D = null
@@ -872,7 +701,7 @@ func _spawn_impact(body: Node3D, normal: Vector3 = Vector3.ZERO) -> void:
 	torus.outer_radius = 0.17
 	var ring_mat := StandardMaterial3D.new()
 	ring_mat.albedo_color = Color(ring_color.r, ring_color.g, ring_color.b,
-		0.8 if impact_light else 0.55)
+		0.8 if impact_light else 0.45)
 	ring_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	if impact_light:
 		# Ударное кольцо огня светится вместе со вспышкой (HDR + аддитив).
@@ -881,9 +710,10 @@ func _spawn_impact(body: Node3D, normal: Vector3 = Vector3.ZERO) -> void:
 		ring_mat.emission_energy_multiplier = 2.2
 		ring_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 	else:
-		# У земли и воды кольцо — расходящаяся волна materia: обычная альфа,
-		# освещено сценой, без собственного света.
-		ring_mat.roughness = 0.9
+		# У земли, воды и ветра кольцо — расходящаяся волна материи: обычная
+		# альфа, освещено сценой, без собственного света.
+		ring_mat.roughness = 0.92
+		ring_mat.metallic_specular = 0.1
 	torus.material = ring_mat
 	var ring := MeshInstance3D.new()
 	ring.mesh = torus
@@ -905,30 +735,15 @@ func _spawn_impact(body: Node3D, normal: Vector3 = Vector3.ZERO) -> void:
 		ft.tween_property(flash, "light_energy", 0.0, 0.55)
 	get_tree().create_timer(0.9, true, false, true).timeout.connect(fx.queue_free)
 
-## Пятно света на поверхности: дешёвый способ показать, что удар «зажёг»
-## место. Использует тот же узкий glow, что и огонь, но без частиц.
+## След удара на поверхности. Светится он только у огня: аддитивное пятно
+## поверх камня и воды — это и есть «магия из sci-fi», от которой избавляемся.
+## У воды — мокрое затемнение и блик, у камня — просто осевшая пыль.
 func _spawn_glow_pool(scene: Node, normal: Vector3) -> void:
-	var color := tint
-	var radius := 1.2
-	var duration := 0.6
-	var energy := 1.6
-	match visual:
-		"fire":
-			color = Color(1.0, 0.55, 0.18)
-			radius = 1.6
-			duration = 0.9
-			energy = 2.2
-		"water":
-			color = Color(0.42, 0.62, 0.86)
-			radius = 1.1
-			energy = 0.8
-		"earth":
-			color = Color(0.62, 0.52, 0.40)
-			radius = 0.9
-			energy = 0.5
-		_:
-			# Ветер не оставляет следов: он уносит их с собой.
-			return
+	if not _emits_light():
+		return
+	var color := Color(1.0, 0.55, 0.18)
+	var radius := 1.6
+	var duration := 0.9
 	var quad := QuadMesh.new()
 	quad.size = Vector2(radius, radius)
 	var mat := StandardMaterial3D.new()
@@ -946,7 +761,6 @@ func _spawn_glow_pool(scene: Node, normal: Vector3) -> void:
 	pool.mesh = quad
 	pool.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	scene.add_child(pool)
-	pool.global_position = global_position + normal * 0.03
 	pool.global_transform.basis = _ring_basis(normal)
 	pool.global_position = global_position + normal * 0.03
 	var tw := pool.create_tween()

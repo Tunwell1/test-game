@@ -188,6 +188,8 @@ func _spell_projectiles_distinct(scene: Node, player: Node) -> bool:
 		"water_jet": "water", "stone_shard": "earth",
 	}
 	var ok := true
+	# Код шейдера по школам: четыре разные материи не могут жить в одном шейдере.
+	var school_shaders := {}
 	for id in expected:
 		caster.set("cooldown_timer", 0.0)
 		caster.call("cast", id)
@@ -205,14 +207,29 @@ func _spell_projectiles_distinct(scene: Node, player: Node) -> bool:
 				var trail := child.find_child("SpellTrail", true, false)
 				var flight_audio := child.find_child("SpellFlightAudio", true, false)
 				var smoke := child.find_child("SpellSmoke", true, false)
+				# Материал тела тоже обязан быть своим: у школ разные шейдеры,
+				# а не один с другим цветом.
+				var body_mat = child.get("_mesh_mat")
+				var shader_ok := body_mat is ShaderMaterial and body_mat.shader != null
+				if shader_ok:
+					school_shaders[str(expected[id])] = body_mat.shader.code
 				if mesh_node != null and mesh_node.mesh != null and trail != null \
-						and flight_audio != null \
+						and flight_audio != null and shader_ok \
 						and (str(expected[id]) != "fire" or smoke != null):
 					found = true
 				# Возвращаем снаряд в пул, иначе он переиспользуется раньше
 				# времени и следующий каст возьмёт «занятый» объект.
 				child.call("_recycle")
 		if not found:
+			ok = false
+	# Все четыре школы обязаны получить разные шейдеры и все четыре — в кэше.
+	if school_shaders.size() != 4:
+		ok = false
+	else:
+		var unique := {}
+		for key in school_shaders:
+			unique[school_shaders[key]] = true
+		if unique.size() != 4:
 			ok = false
 
 	# Попадание должно создавать отдельный эффект со вспышкой света,
