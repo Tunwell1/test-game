@@ -50,7 +50,7 @@ static func emit_strength(visual: String) -> float:
 static func body_mesh(visual: String) -> ArrayMesh:
 	match kind_of(visual):
 		KIND_WIND:
-			return _spiral_ribbons(3)
+			return _air_stream()
 		KIND_WATER:
 			return _droplet(0.115, 0.40)
 		KIND_EARTH:
@@ -151,44 +151,33 @@ static func _rock(radius: float, facets: int) -> ArrayMesh:
 	return st.commit()
 
 
-## Ветер: несколько спиральных лент вдоль оси полёта. Тонкие жёсткие штрихи
-## читаются как струи воздуха; равномерное облако точек — как пыль.
-static func _spiral_ribbons(count: int) -> ArrayMesh:
+## Ветер: не отдельное «тело», а длинная струя за наконечником. Форма —
+## веретено, вытянутое назад, с мягким срезом. Всё, что видит игрок, — это
+## преломление фона внутри струи, поэтому геометрия обязана быть длинной и
+## гладкой: короткие ленты читаются как палки.
+static func _air_stream() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var segs := 26
-	for k in count:
-		var phase := TAU * float(k) / float(count)
-		var radius := 0.085 + 0.03 * float(k)
-		var prev_center := Vector3.ZERO
-		var prev_side := Vector3.ZERO
-		for i in segs + 1:
-			var t := float(i) / float(segs)
-			# Лента закручивается: угол растёт вдоль оси.
-			var a := phase + t * 8.4
-			var taper := sin(t * PI) * 0.5 + 0.5
-			var center := Vector3(cos(a) * radius * taper,
-				sin(a) * radius * taper, (t - 0.5) * 0.72)
-			var tangent := Vector3(cos(a + 0.35), sin(a + 0.35), 0.35).normalized()
-			var side := tangent.cross(Vector3(0.0, 0.0, 1.0)).normalized() \
-				* (0.010 + 0.006 * taper)
-			if i > 0:
-				st.add_vertex(prev_center - prev_side)
-				st.add_vertex(center - side)
-				st.add_vertex(center + side)
-				st.add_vertex(prev_center - prev_side)
-				st.add_vertex(center + side)
-				st.add_vertex(prev_center + prev_side)
-				# Вторая сторона ленты: видно и с изнанки (cull_disabled тоже есть,
-				# но свои нормали дают верный блик с обеих сторон).
-				st.add_vertex(prev_center + prev_side)
-				st.add_vertex(center + side)
-				st.add_vertex(center - side)
-				st.add_vertex(prev_center + prev_side)
-				st.add_vertex(center - side)
-				st.add_vertex(prev_center - prev_side)
-			prev_center = center
-			prev_side = side
+	var rings := 16
+	var segments := 14
+	var prev := PackedVector3Array()
+	for i in rings + 1:
+		var t := float(i) / float(rings)
+		# Наконечник (t=0) острый, дальше струя расширяется и тает к хвосту.
+		var r := 0.105 * sin(pow(t, 0.75) * PI) * (1.0 - 0.15 * t)
+		var z := (0.25 - t) * 1.8
+		var ring := PackedVector3Array()
+		for j in segments:
+			var a := TAU * float(j) / float(segments)
+			# Лёгкая волна по кромке: струя не идеальный цилиндр.
+			var wobble := 1.0 + 0.10 * sin(a * 3.0 + t * 10.0)
+			ring.append(Vector3(cos(a) * r * wobble, sin(a) * r * wobble, z))
+		if i > 0:
+			for j in segments:
+				var j2 := (j + 1) % segments
+				st.add_vertex(prev[j]); st.add_vertex(ring[j]); st.add_vertex(ring[j2])
+				st.add_vertex(prev[j]); st.add_vertex(ring[j2]); st.add_vertex(prev[j2])
+		prev = ring
 	st.generate_normals()
 	return st.commit()
 
@@ -330,16 +319,17 @@ void fragment() {
 
 
 ## ВЕТЕР.
-## Воздух невидим; видно только то, как он искажает мир. Поэтому тело ветра —
-## тонкая плёнка, которая сдвигает SCREEN_UV по шуму (преломление). Плюс слабый
-## глянцевый блик по кромке, чтобы лента не была совсем невидимой.
+## Воздух невидим: видно только то, как он искажает мир. Поэтому у ветра нет
+## «тела» — только длинная струя за снарядом, которая сдвигает фон по шуму и
+## краем показывает «плёнку» наружу. Прошлая версия оставляла в кадре три
+## крученые ленты-параллелепипеда — это читалось как геометрия, а не воздух.
 static func _air_shader() -> String:
 	return """
 shader_type spatial;
 render_mode blend_mix, cull_disabled, depth_draw_never, shadows_disabled;
 
 uniform vec4 tint : source_color = vec4(0.86, 0.93, 1.0, 1.0);
-uniform float distortion = 0.022;
+uniform float distortion = 0.06;
 uniform float speed = 1.0;
 uniform sampler2D screen_tex : hint_screen_texture, filter_linear_mipmap;
 
@@ -349,96 +339,104 @@ varying vec3 v_local;
 
 void vertex() {
 	v_local = VERTEX;
-	// Ленты изгибаются в полёте: волна бежит по ним с носа в хвост.
-	float along = clamp((v_local.z + 0.36) / 0.72, 0.0, 1.0);
-	VERTEX.xy += normalize(VERTEX.xy + vec3(0.001)) \
-		* sin(TIME * 7.0 * speed - along * 9.0) * 0.014;
 }
 
 void fragment() {
-	float along = clamp((v_local.z + 0.36) / 0.72, 0.0, 1.0);
-	// Шум течёт вдоль ленты: направление движения читается по смещению фона.
-	vec3 p = vec3(v_local.xy * 8.0, along * 5.0 - TIME * speed * 6.0);
-	float n = fbm3(p);
-	float ripple = fbm3(p * 2.3 + vec3(0.0, 0.0, -TIME * speed * 9.0));
+	// along: 0 — наконечник впереди, 1 — хвост струи. Струя тянется назад,
+	// поэтому за снарядом воздух «течёт» в кадре сам собой.
+	float along = clamp((v_local.z + 0.9) / 1.8, 0.0, 1.0);
 
-	// Преломление: мир за струёй сдвигается. Именно это читается как «воздух
-	// движется» — частицы показывают только то, что в воздухе летит.
-	vec2 offset = (vec2(n, ripple) - 0.5) * distortion;
+	// Турбулентность течёт вдоль струи и заметно быстрее снаряда: именно
+	// движение возмущения, а не форма, читается как поток воздуха.
+	vec3 p = vec3(v_local.xy * 5.0, along * 7.0 - TIME * speed * 7.0);
+	float turb = fbm3(p);
+	float fine = fbm3(p * 2.7 + vec3(0.0, 0.0, -TIME * speed * 11.0));
+
+	// Смещение фона: единственное, что реально показывает воздух.
+	vec2 offset = (vec2(turb, fine) - 0.5) * distortion * (1.0 - along * 0.45);
 	vec3 behind = texture(screen_tex, SCREEN_UV + offset).rgb;
 
-	// Кромка ловит свет: очень слабый блик, ровно чтобы форма была видна.
-	float facing = abs(dot(normalize(NORMAL), normalize(VIEW)));
-	float edge = pow(1.0 - facing, 3.0);
+	// Границы струи по радиусу: ядро полностью прозрачное, края ловят свет.
+	float radius = length(v_local.xy) / 0.115;
+	float edge = smoothstep(0.35, 1.0, radius);
 
-	ALBEDO = tint.rgb * 0.25 + behind * 0.85;
-	EMISSION = behind * 0.12;
-	ALPHA = clamp(0.10 + edge * 0.30, 0.0, 0.55);
-	ROUGHNESS = 0.85;
+	// Плёнка по кромке: чуть светлее фона, чтобы форма читалась без заливки.
+	vec3 film = (behind + tint.rgb * 0.22) * 0.55 + tint.rgb * 0.06;
+	ALBEDO = mix(behind * 1.02, film, edge * 0.75);
+	EMISSION = behind * 0.06 * (1.0 - edge);
+	ALPHA = clamp(edge * (0.10 + 0.22 * turb) + turb * 0.05, 0.0, 0.5);
+	ALPHA *= 1.0 - smoothstep(0.75, 1.0, along) * 0.8;
+	ROUGHNESS = 0.9;
 	METALLIC = 0.0;
-	SPECULAR = edge * 0.35;
+	SPECULAR = 0.0;
 }
 """
 
 
 ## ВОДА.
-## Три вещи одновременно: преломление фона, fresnel по кромке и поглощение по
-## толщине (закон Бера — Ламберта). Постоянная альфа = «голубая краска»,
-## переменная по толщине = жидкость.
+## Главная причина «краски» — в шейдере была ошибка: объявлен varying v_local,
+## но не присвоен в vertex(), поэтому толщина слоя всегда была нулевой и
+## поглощение не работало. Теперь толщина считается из геометрии капли, фон
+## преломляется, по кромке fresnel, и всё это без постоянной альфы-заливки.
 static func _liquid_shader() -> String:
 	return """
 shader_type spatial;
-render_mode blend_mix, cull_disabled, depth_draw_never, shadows_disabled,
-	world_vertex_coords;
+render_mode blend_mix, cull_disabled, depth_draw_never, shadows_disabled;
 
-uniform vec4 tint : source_color = vec4(0.42, 0.66, 0.80, 1.0);
-uniform float distortion = 0.045;
-uniform float absorption = 2.6;
-uniform float thickest = 0.16;
+uniform vec4 tint : source_color = vec4(0.40, 0.62, 0.72, 1.0);
+uniform float distortion = 0.10;
+uniform float absorption = 9.0;
 uniform float speed = 1.0;
 uniform sampler2D screen_tex : hint_screen_texture, filter_linear_mipmap;
-uniform sampler2D depth_tex : hint_depth_texture, filter_linear_mipmap;
 
 varying vec3 v_local;
 
 """ + NOISE_LIB + """
 
 void vertex() {
-	// v_local нужен фрагменту, чтобы посчитать толщину слоя воды в точке.
 	v_local = VERTEX;
 }
 
 void fragment() {
-	// Толщина воды в этой точке: у центра капли путь длиннее, у кромки короче.
+	// Толщина воды в этой точке: у центра капли путь луча максимален,
+	// у кромки стремится к нулю. Это и делает воду объёмной.
 	float radial = clamp(length(v_local.xy) / 0.115, 0.0, 1.0);
-	float thickness = thickest * sqrt(max(0.0, 1.0 - radial * radial));
+	float thickness = 0.22 * sqrt(max(1.0 - radial * radial, 0.0));
 
-	// Поверхностная рябь: мелкая, быстрая, не ломает силуэт.
-	vec3 p = vec3(v_local.xy * 14.0, v_local.z * 6.0 - TIME * speed * 4.0);
+	// Рябь на поверхности: крупная медленная + мелкая быстрая.
+	vec3 p = vec3(v_local.xy * 10.0, v_local.z * 5.0 - TIME * speed * 3.0);
 	float nx = fbm3(p) - 0.5;
-	float ny = fbm3(p + vec3(17.0, 3.0, 0.0)) - 0.5;
-	vec3 n = normalize(vec3(nx, ny, 0.65));
+	float ny = fbm3(p + vec3(23.0, 7.0, 0.0)) - 0.5;
+	float ripple = (fbm3(p * 3.1) - 0.5) * 0.35;
+	float fdx = nx + ripple;
+	float fdy = ny + ripple;
 
-	float facing = clamp(dot(n, normalize(VIEW)), 0.0, 1.0);
-	// Schlick: у кромки отражение, в центре — прозрачность.
-	float fresnel = pow(1.0 - facing, 4.0);
+	float facing = clamp(abs(dot(normalize(NORMAL), normalize(VIEW))), 0.0, 1.0);
+	// Schlick: у кромки отражение почти единица, в центре прозрачно.
+	float fresnel = 0.02 + 0.98 * pow(1.0 - facing, 4.5);
 
-	// Beer–Lambert: чем толще слой, тем сильнее гасится проходящий цвет.
-	vec3 transmittance = exp(-tint.rgb * absorption * thickness * 6.0);
-	vec2 offset = vec2(nx, ny) * distortion;
+	// Beer–Lambert: свет гасится по толщине. Красный канал гаснет сильнее —
+	// именно поэтому глубина у воды сине-зелёная, а не серая.
+	vec3 sigma = vec3(1.0, 0.55, 0.32) * absorption;
+	vec3 transmittance = exp(-sigma * thickness);
+
+	vec2 offset = vec2(fdx, fdy) * distortion * (0.4 + thickness);
 	vec3 behind = texture(screen_tex, SCREEN_UV - offset).rgb;
-	vec3 refracted = behind * transmittance;
+	vec3 through = behind * transmittance;
 
-	// Мутная глубина: цвет воды виден только там, где слой толстый.
-	vec3 volume = tint.rgb * smoothstep(0.02, thickest, thickness) * 0.55;
+	// Свет, который прошёл сквозь каплю и вышел с её дальней стороны:
+	// добавляет «внутреннего» свечения жидкости, но не самосвета.
+	vec3 glow_inside = tint.rgb * (1.0 - transmittance) * 0.55;
 
-	ALBEDO = refracted * 0.55 + volume;
-	EMISSION = refracted * (1.0 - transmittance) * 0.35;
-	ALPHA = clamp(0.18 + (1.0 - transmittance.r) * 0.55 + fresnel * 0.35,
-		0.0, 0.92);
-	ROUGHNESS = 0.03;
+	ALBEDO = through * 0.75 + glow_inside;
+	EMISSION = through * (1.0 - transmittance) * 0.5;
+	// Альфа целиком из физики: где тонко — прозрачно, где толсто — плотно,
+	// по кромке — отражение. Константы вроде 0.55 больше нет.
+	ALPHA = clamp(0.08 + (1.0 - transmittance.r) * 0.85 + fresnel * 0.30,
+		0.0, 0.96);
+	ROUGHNESS = 0.02;
 	METALLIC = 0.0;
-	SPECULAR = 0.9;
+	SPECULAR = 0.95;
 }
 """
 
@@ -477,6 +475,12 @@ void fragment() {
 	// Мелкие осколки-вкрапления: чуть более светлые зёрна кварца.
 	float quartz = step(0.86, grain);
 	col = mix(col, col * 1.45 + vec3(0.05), quartz);
+
+	// Жёсткая кромка: тонкая светлая линия по граням. Именно она даёт
+	// «чёткость» камня, которую прошлая версия размывала частицами.
+	float facing = clamp(abs(dot(normalize(NORMAL), normalize(VIEW))), 0.0, 1.0);
+	float facet_edge = smoothstep(0.55, 0.85, 1.0 - facing);
+	col += vec3(0.16, 0.15, 0.13) * facet_edge;
 
 	ALBEDO = col;
 	ROUGHNESS = 0.94 - quartz * 0.25;

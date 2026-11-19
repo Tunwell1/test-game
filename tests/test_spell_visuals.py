@@ -41,7 +41,7 @@ class SpellVisualTests(unittest.TestCase):
         self.assertIn("func _build_mesh() -> Mesh:", text)
         self.assertIn("return SpellVisuals.body_mesh(visual)", text)
         visuals = VISUALS.read_text(encoding="utf-8")
-        for fn in ("_flame_spindle(", "_spiral_ribbons(", "_droplet(", "_rock("):
+        for fn in ("_flame_spindle(", "_air_stream(", "_droplet(", "_rock("):
             self.assertIn("static func %s" % fn, visuals)
         self.assertIn("const KIND_FIRE := 0", visuals)
         self.assertIn("const KIND_EARTH := 3", visuals)
@@ -53,7 +53,9 @@ class SpellVisualTests(unittest.TestCase):
         self.assertIn("ParticleProcessMaterial.new()", text)
         self.assertIn("process.gravity = Vector3(0.0, 1.5, 0.0)", text)
         self.assertIn("motion *= 0.92 + 0.16 * sin(_time * 18.0)", text)
-        self.assertIn("_mesh.rotation += Vector3(1.4, 2.2, 0.9) * delta", text)
+        # Кувырок камня — вокруг оси полёта, а не вокруг мировых осей.
+        self.assertIn("_spin += 3.1 * delta", text)
+        self.assertIn("b = b * Basis(Vector3(0.0, 0.0, 1.0), _spin)", text)
 
     def test_particles_use_hard_procedural_sprites(self):
         text = PROJECTILE.read_text(encoding="utf-8")
@@ -132,9 +134,26 @@ class SpellVisualTests(unittest.TestCase):
         self.assertIn("func _speed_factor() -> float:", text)
         self.assertIn("* _speed_factor() * delta", text)
         # Земля летит по дуге, а не по прямой.
-        self.assertIn("-7.5 * _time + 2.2", text)
+        self.assertIn("Vector3(0.0, -7.5 * _time + 2.2, 0.0) * delta", text)
         # Снаряд «выстреливается» из руки, а не появляется готовым.
         self.assertIn("_mesh.scale = Vector3.ONE * 0.35", text)
+
+    def test_body_is_oriented_along_flight(self):
+        """Тело строится вдоль +Z и обязано поворачиваться по направлению.
+
+        Без этого камера видела снаряд сбоку: вытянутое веретено и струя
+        читались прямоугольником — отсюда жалобы на «параллелепипеды».
+        """
+        text = PROJECTILE.read_text(encoding="utf-8")
+        self.assertIn("func _align_body() -> void:", text)
+        self.assertIn("var b := Basis.looking_at(-dir, Vector3.UP)", text)
+        # Вызывается и при запуске, и каждый кадр (у камня дуга).
+        launch = text.split("func launch() -> void:", 1)[1].split("func ", 1)[0]
+        self.assertIn("_align_body()", launch)
+        self.assertIn("\n\t_align_body()\n", text)
+        # Кувырок камня не должен перебивать ориентацию вращением узла целиком.
+        self.assertNotIn("_mesh.rotation += Vector3(", text)
+        self.assertNotIn("_mesh.rotation.z += 2.2 * delta", text)
 
     def test_fire_light_flickers(self):
         text = PROJECTILE.read_text(encoding="utf-8")
@@ -243,16 +262,18 @@ class SpellVisualTests(unittest.TestCase):
             .split("static func _liquid_shader()", 1)[0]
         self.assertIn("hint_screen_texture", air)
         self.assertIn("texture(screen_tex, SCREEN_UV + offset)", air)
-        self.assertIn("vec2 offset = (vec2(n, ripple) - 0.5) * distortion;", air)
+        self.assertIn("vec2 offset = (vec2(turb, fine) - 0.5) * distortion", air)
         # Плёнка почти невидима: альфа много меньше единицы.
-        self.assertIn("ALPHA = clamp(0.10 + edge * 0.30", air)
+        self.assertIn("float edge = smoothstep(0.35, 1.0, radius);", air)
+        # Ядро струи полностью прозрачное: заливки нет, есть преломление.
+        self.assertIn("ALPHA = clamp(edge * (0.10 + 0.22 * turb)", air)
         # У воздуха нет собственного свечения.
         self.assertNotIn("EMISSION = col", air)
         text = PROJECTILE.read_text(encoding="utf-8")
         trail = text.split('"wind":\n\t\t\t#', 1)
         self.assertTrue(trail, "след ветра должен быть описан с комментарием")
         # Частиц ветра мало: образ держит тело, а не они.
-        self.assertIn("particles.amount = 10", text)
+        self.assertIn("particles.amount = 7", text)
 
     def test_water_is_transparent_liquid(self):
         """Вода: преломление, fresnel и поглощение по толщине, не заливка."""
@@ -260,14 +281,15 @@ class SpellVisualTests(unittest.TestCase):
         water = visuals.split("static func _liquid_shader()", 1)[1] \
             .split("static func _stone_shader()", 1)[0]
         self.assertIn("hint_screen_texture", water)
-        self.assertIn("float fresnel = pow(1.0 - facing, 4.0);", water)
+        self.assertIn("float fresnel = 0.02 + 0.98 * pow(1.0 - facing, 4.5);", water)
         # Закон Бера — Ламберта: цвет гасится по толщине слоя.
-        self.assertIn("vec3 transmittance = exp(-tint.rgb * absorption", water)
-        self.assertIn("float thickness = thickest * sqrt(max(0.0, 1.0 - radial", water)
+        self.assertIn("vec3 sigma = vec3(1.0, 0.55, 0.32) * absorption;", water)
+        self.assertIn("vec3 transmittance = exp(-sigma * thickness);", water)
+        self.assertIn("float thickness = 0.22 * sqrt(max(1.0 - radial * radial, 0.0));", water)
         # v_local обязан присваиваться в vertex, иначе толщина нулевая.
         self.assertIn("void vertex() {", water)
         self.assertIn("v_local = VERTEX;", water)
-        self.assertIn("ROUGHNESS = 0.03;", water)
+        self.assertIn("ROUGHNESS = 0.02;", water)
         # Никакой постоянной альфы-заливки.
         self.assertNotIn("ALPHA = 0.55 + rim * 0.4;", water)
 

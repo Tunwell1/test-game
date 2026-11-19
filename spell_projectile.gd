@@ -17,6 +17,8 @@ var tint: Color = Color.WHITE
 
 var _spent: bool = false
 var _time: float = 0.0
+## Накопленный кувырок камня вокруг оси полёта (радианы).
+var _spin: float = 0.0
 var _mesh: MeshInstance3D = null
 var _trail: GPUParticles3D = null
 var _light: OmniLight3D = null
@@ -233,8 +235,12 @@ func _set_particle_color(particles: GPUParticles3D, color: Color) -> void:
 func launch() -> void:
 	_spent = false
 	_time = 0.0
+	_spin = 0.0
 	visible = true
 	set_physics_process(true)
+	# Ось тела совпадает с осью полёта. Без этого камера видела снаряд
+	# сбоку: вытянутое веретено читалось прямоугольником.
+	_align_body()
 	if _mesh != null:
 		_mesh.scale = Vector3.ONE * 0.35
 	if _trail != null:
@@ -247,6 +253,21 @@ func launch() -> void:
 		SpellAudio.flight_stream(visual), -16.0, "SpellFlightAudio")
 	if flight != null:
 		flight.max_distance = 18.0
+
+## Повернуть тело по направлению полёта. Тела строятся вдоль +Z, при этом
+## -Z у Godot — «вперёд» камеры, поэтому одного look_at недостаточно.
+func _align_body() -> void:
+	if _mesh == null:
+		return
+	var dir := direction.normalized()
+	if dir.length_squared() < 0.0001:
+		return
+	# Basis.looking_at смотрит -Z: инвертируем, чтобы +Z тела глядел вперёд.
+	var b := Basis.looking_at(-dir, Vector3.UP)
+	# Кувырок вокруг собственной оси полёта: камень катится, а не вращается
+	# вокруг мировых осей (из-за этого он «складывался» в куб).
+	b = b * Basis(Vector3(0.0, 0.0, 1.0), _spin)
+	_mesh.global_transform.basis = b
 
 ## Возврат в пул: снаряд гаснет и засыпает вместо queue_free. Визуальные
 ## эффекты попадания уже отвязаны от снаряда и живут в сцене сами.
@@ -370,7 +391,7 @@ func _make_trail() -> GPUParticles3D:
 			# не изображают воздух, а показывают, что поток несёт: пыль,
 			# которую он подхватил по дороге.
 			kind = "streak"
-			base_size = 0.14
+			base_size = 0.07
 		"water":
 			# Не «искры воды», а разлетающиеся брызги: мягкие капли.
 			kind = "droplet"
@@ -398,8 +419,8 @@ func _make_trail() -> GPUParticles3D:
 			process.initial_velocity_max = 1.2
 			process.gravity = Vector3(0.0, 1.5, 0.0)
 		"wind":
-			particles.amount = 10
-			particles.lifetime = 0.4
+			particles.amount = 7
+			particles.lifetime = 0.35
 			process.direction = Vector3(0.0, 0.0, 1.0)
 			process.spread = 12.0
 			process.initial_velocity_min = 1.2
@@ -539,31 +560,35 @@ func _physics_process(delta: float) -> void:
 		_mesh.scale = Vector3.ONE * lerpf(0.35, 1.0, grow)
 	var from := global_position
 	var motion := direction * speed * _speed_factor() * delta
+	# Земля летит по дуге: настоящий камень не держит линию прицела, и его
+	# ось поворачивается вместе с траекторией, иначе кувырок выглядит
+	# вращением на месте.
+	if visual == "earth":
+		direction = (direction + Vector3(0.0, -7.5 * _time + 2.2, 0.0) * delta).normalized()
 	match visual:
 		"fire":
 			motion += Vector3(sin(_time * 9.0) * 0.35, 0.45, 0.0) * delta
 			if _mesh != null:
-				_mesh.rotation.z += 2.2 * delta
+				_mesh.rotate_object_local(Vector3(0.0, 0.0, 1.0), 2.2 * delta)
 			# Пламя не горит ровно: свет дрожит на двух частотах.
 			if _light != null:
 				_light.light_energy = 2.4 + 0.35 * sin(_time * 21.0) + 0.2 * sin(_time * 33.0)
 		"wind":
 			motion += Vector3(sin(_time * 16.0) * 1.1, cos(_time * 13.0) * 0.45, 0.0) * delta
-			if _mesh != null:
-				_mesh.rotation.z = sin(_time * 8.0) * 0.5
+			# Струю воздуха не крутит: вращение выдаёт твёрдое тело. Она
+			# только дрожит, а ориентацию держит _align_body().
 		"water":
 			motion *= 0.92 + 0.16 * sin(_time * 18.0)
 			motion += Vector3(0.0, -1.8, 0.0) * delta
 			if _mesh != null:
-				_mesh.rotation.z += 0.5 * delta
+				_mesh.rotate_object_local(Vector3(0.0, 0.0, 1.0), 0.5 * delta)
 		"earth":
-			# Настоящая дуга: камень сначала летит вверх, потом падает.
-			# Прямая линия выдаёт «лазер», а не брошенный осколок.
-			motion += Vector3(0.0, -7.5 * _time + 2.2, 0.0) * delta
-			if _mesh != null:
-				_mesh.rotation += Vector3(1.4, 2.2, 0.9) * delta
+			# Дуга учтена в direction выше; здесь только визуал кувырка.
+			_spin += 3.1 * delta
 
 	var to := from + motion
+	# Ориентация обновляется по текущей траектории (для дуги она меняется).
+	_align_body()
 	# Area3D-сигналы могут пропустить тонкое препятствие за тик — проверяем сегмент.
 	var query := PhysicsRayQueryParameters3D.create(from, to, collision_mask)
 	var hit := get_world_3d().direct_space_state.intersect_ray(query)
