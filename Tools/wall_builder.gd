@@ -4,8 +4,9 @@ extends EditorScript
 ## Ставит пролёт стены из готовых модулей Models/*_with_collision.tscn.
 ## Открыть этот файл в редакторе и нажать File > Run (Ctrl+Shift+X).
 ##
-## У всех модулей общий пивот — левый нижний угол, ширина 6.4 м,
-## прямой стык — это x = 0, 6.4, 12.8, ...; углы поворачивают продолжение.
+## У прямых модулей общий пивот — левый нижний угол, ширина 6.4 м,
+## стык — это x = 0, 6.4, 12.8, ... Угол — дуга радиуса CORNER_STEP,
+## он сдвигает ряд на CORNER_STEP и поворачивает его на +90°.
 ## Модули кладутся внутрь узла WallRun: его двигают и поворачивают целиком.
 ## Повторный запуск продолжает от последнего распознанного модуля в дереве.
 ##
@@ -13,6 +14,14 @@ extends EditorScript
 ## предупреждает, если пивот или передняя плоскость отличаются от остальных.
 
 const MODULE_WIDTH := 6.4
+## Радиус дуги угла на плоскости z = 0 (см. Tools/generate_wall_corners.py).
+## Подобран так, что четверть дуги равна одному прямому модулю:
+## CORNER_STEP * PI / 2 = 6.4 м, то есть вся кладка Wall.glb уходит в угол
+## без растяжения, обрезки и повтора. Угол занимает CORNER_STEP + 0.2 м по
+## каждой оси и сдвигает продолжение ряда на CORNER_STEP, а не на полный шаг
+## 6.4 м; остаток 6.4 - CORNER_STEP закрывает угловой ассет пола (полная
+## клетка 6.4 x 6.4 м), поэтому третьего «узкого» ассета не нужно.
+const CORNER_STEP := 4.0743
 ## Допуск по X (в метрах). Ошибка пивота — это сантиметры и метры, не мм.
 const X_TOLERANCE := 0.02
 ## Допуск по передней плоскости: у моделей она гуляет на 1.5 см из-за арта.
@@ -22,11 +31,10 @@ const MODULES := {
 	"window": "res://Models/Wall_and_window_with_collision.tscn",
 	"two_windows": "res://Models/Wall_and_two_windows_with_collision.tscn",
 	"door": "res://Models/Wall_door_with_collision.tscn",
-	"corner_90": "res://Models/Wall_corner_90_with_collision.tscn",
-	"corner_smooth": "res://Models/Wall_corner_smooth_with_collision.tscn",
+	"corner": "res://Models/Corner_Wall_with_collision.tscn",
 }
 ## Порядок модулей. Углы поворачивают дальнейший ряд на +90° вокруг Y.
-## Например: ["wall", "corner_90", "wall"] или corner_smooth.
+## Например: ["wall", "corner", "wall"].
 const PATTERN := ["door", "window", "wall", "two_windows", "wall"]
 
 
@@ -129,12 +137,12 @@ func _mesh_bounds(module: Node3D, space: Node3D) -> AABB:
 ## Выход из модуля в его локальной системе координат.
 func _exit_transform(corner: bool) -> Transform3D:
 	if corner:
-		return Transform3D(Basis(Vector3.UP, PI / 2.0), Vector3(MODULE_WIDTH, 0.0, -MODULE_WIDTH))
+		return Transform3D(Basis(Vector3.UP, PI / 2.0), Vector3(CORNER_STEP, 0.0, -CORNER_STEP))
 	return Transform3D(Basis.IDENTITY, Vector3(MODULE_WIDTH, 0.0, 0.0))
 
 
 func _is_corner(key: String) -> bool:
-	return key == "corner_90" or key == "corner_smooth"
+	return key == "corner"
 
 
 ## Продолжение от последнего известного инстанса в порядке дерева сцены.

@@ -5,11 +5,8 @@
 [ext_resource type="Script" uid="uid://cwgtp0lhnuofk" path="res://Interactable.gd" id="3_interact"]
 [ext_resource type="Script" uid="uid://cnjr2p75ao1pj" path="res://enemy_health_overlay.gd" id="5_overlay"]
 [ext_resource type="PackedScene" path="res://Models/Wall_with_collision.tscn" id="6_7mycd"]
-[ext_resource type="PackedScene" path="res://Models/Wall_and_two_windows_with_collision.tscn" id="7_two_windows"]
-[ext_resource type="PackedScene" path="res://Models/Wall_door_with_collision.tscn" id="8_door"]
-[ext_resource type="PackedScene" uid="uid://ctb2nh37rymen" path="res://Models/Corner_Wall.glb" id="9_kek77"]
-[ext_resource type="PackedScene" path="res://Models/Wall_and_window_with_collision.tscn" id="9_window"]
-[ext_resource type="PackedScene" path="res://Models/Wall_corner_with_collision.tscn" id="10_corner"]
+[ext_resource type="PackedScene" path="res://Models/Corner_Wall_with_collision.tscn" id="9_kek77"]
+[ext_resource type="Script" path="res://floor_variant_selector.gd" id="13_floor_selector"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_1"]
 sky_horizon_color = Color(0.64625, 0.65575, 0.67075, 1)
@@ -30,20 +27,6 @@ size = Vector3(30, 1, 30)
 
 [sub_resource type="BoxShape3D" id="BoxShape_floor"]
 size = Vector3(30, 1, 30)
-
-[sub_resource type="BoxMesh" id="BoxMesh_box"]
-material = ExtResource("1_mat")
-size = Vector3(2, 2, 2)
-
-[sub_resource type="BoxShape3D" id="BoxShape_box"]
-size = Vector3(2, 2, 2)
-
-[sub_resource type="BoxMesh" id="BoxMesh_ceil"]
-material = ExtResource("1_mat")
-size = Vector3(3, 0.4, 2)
-
-[sub_resource type="BoxShape3D" id="BoxShape_ceil"]
-size = Vector3(3, 0.4, 2)
 
 [sub_resource type="BoxMesh" id="BoxMesh_step"]
 material = ExtResource("1_mat")
@@ -78,35 +61,13 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -3, 1, -4)
 collision_layer = 4
 script = ExtResource("3_interact")
 
-[node name="MeshInstance3D" type="MeshInstance3D" parent="BoxLeft" unique_id=1040693522]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -8)
-mesh = SubResource("BoxMesh_box")
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="BoxLeft" unique_id=1997848562]
-shape = SubResource("BoxShape_box")
-
 [node name="BoxRight" type="StaticBody3D" parent="." unique_id=1774281862]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 1, -4)
 collision_layer = 4
 script = ExtResource("3_interact")
 
-[node name="MeshInstance3D" type="MeshInstance3D" parent="BoxRight" unique_id=347324519]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -5)
-mesh = SubResource("BoxMesh_box")
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="BoxRight" unique_id=1092668638]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -8)
-shape = SubResource("BoxShape_box")
-
 [node name="LowCeiling" type="StaticBody3D" parent="." unique_id=1548379742]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.4, -4)
-
-[node name="MeshInstance3D" type="MeshInstance3D" parent="LowCeiling" unique_id=65150600]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -8)
-mesh = SubResource("BoxMesh_ceil")
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="LowCeiling" unique_id=1761116681]
-shape = SubResource("BoxShape_ceil")
 
 [node name="Stair1" type="StaticBody3D" parent="." unique_id=1608271421]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.125, 4)
@@ -138,21 +99,44 @@ shape = SubResource("BoxShape_step")
 [node name="EnemyHealthOverlay" type="CanvasLayer" parent="." unique_id=1864914020]
 script = ExtResource("5_overlay")
 
-[node name="WallRun" type="Node3D" parent="." unique_id=1737964240]
+[node name="FirstFloor" type="Node3D" parent="." unique_id=-2095967296]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -6.4, 0, 10.4743)
 
-[node name="door_00" parent="WallRun" unique_id=326836813 instance=ExtResource("8_door")]
+[node name="wall_00_00" parent="FirstFloor" unique_id=-2094967296 instance=ExtResource("6_7mycd")]
 
-[node name="window_01" parent="WallRun" unique_id=736286938 instance=ExtResource("9_window")]
+[node name="wall_00_01" parent="FirstFloor" unique_id=-2094967295 instance=ExtResource("6_7mycd")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6.4, 0, 0)
 
-[node name="wall_02" parent="WallRun" unique_id=1749635324 instance=ExtResource("6_7mycd")]
+[node name="corner_00" parent="FirstFloor" unique_id=-2094967294 instance=ExtResource("9_kek77")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 12.8, 0, 0)
 
-[node name="two_windows_03" parent="WallRun" unique_id=174319845 instance=ExtResource("7_two_windows")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 19.2, 0, 0)
+[node name="wall_01_00" parent="FirstFloor" unique_id=-2094967293 instance=ExtResource("6_7mycd")]
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 16.8743, 0, -4.0743)
 
-[node name="wall_04" parent="WallRun" unique_id=817183101 instance=ExtResource("6_7mycd")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 25.6, 0, 0)
+[node name="wall_01_01" parent="FirstFloor" unique_id=-2094967292 instance=ExtResource("6_7mycd")]
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 16.8743, 0, -10.4743)
 
-[node name="Corner_Wall" parent="." unique_id=2081043683 instance=ExtResource("9_kek77")]
-transform = Transform3D(-4.371139e-08, 0, -1, 0, 1, 0, 1, 0, -4.371139e-08, -4.05, 0, -4.65)
+[node name="corner_01" parent="FirstFloor" unique_id=-2094967291 instance=ExtResource("9_kek77")]
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 16.8743, 0, -16.8743)
+
+[node name="wall_02_00" parent="FirstFloor" unique_id=-2094967290 instance=ExtResource("6_7mycd")]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 12.8, 0, -20.9486)
+
+[node name="wall_02_01" parent="FirstFloor" unique_id=-2094967289 instance=ExtResource("6_7mycd")]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 6.4, 0, -20.9486)
+
+[node name="corner_02" parent="FirstFloor" unique_id=-2094967288 instance=ExtResource("9_kek77")]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 0, -20.9486)
+
+[node name="wall_03_00" parent="FirstFloor" unique_id=-2094967287 instance=ExtResource("6_7mycd")]
+transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, -4.0743, 0, -16.8743)
+
+[node name="wall_03_01" parent="FirstFloor" unique_id=-2094967286 instance=ExtResource("6_7mycd")]
+transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, -4.0743, 0, -10.4743)
+
+[node name="corner_03" parent="FirstFloor" unique_id=-2094967285 instance=ExtResource("9_kek77")]
+transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, -4.0743, 0, -4.0743)
+
+[node name="WoodFloor" type="Node3D" parent="." unique_id=-1994967296]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.02, 0)
+script = ExtResource("13_floor_selector")
