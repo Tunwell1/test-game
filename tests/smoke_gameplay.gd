@@ -162,6 +162,9 @@ func _debug_controls_work(hud: Node, player: Node) -> bool:
 	hud.call("_unhandled_input", f3)
 	var opened := Engine.time_scale < 1.0
 
+	# F3 по умолчанию: время 1.0, скорость магии 0.1 (замедленный полёт).
+	var defaults_ok := is_equal_approx(Engine.time_scale, 1.0) \
+		and is_equal_approx(float(caster.get("speed_multiplier")), 0.1)
 	var minus := InputEventKey.new()
 	minus.physical_keycode = KEY_MINUS
 	minus.pressed = true
@@ -170,12 +173,20 @@ func _debug_controls_work(hud: Node, player: Node) -> bool:
 	bracket.physical_keycode = KEY_BRACKETRIGHT
 	bracket.pressed = true
 	hud.call("_unhandled_input", bracket)
-	var tuned := Engine.time_scale < 1.0 and float(caster.get("speed_multiplier")) > 1.0
+	# Шаг свободный: время ушло ниже 1, магия выросла выше 0.1.
+	var tuned := Engine.time_scale < 1.0 and float(caster.get("speed_multiplier")) > 0.1
+	# Ограничений нет: много нажатий «=» выводит за пределы старых ступеней.
+	var plus := InputEventKey.new()
+	plus.physical_keycode = KEY_EQUAL
+	plus.pressed = true
+	for i in 14:
+		hud.call("_unhandled_input", plus)
+	var unbounded := Engine.time_scale > 0.5
 
 	hud.call("_unhandled_input", f3)
 	var restored := is_equal_approx(Engine.time_scale, 1.0) \
 		and is_equal_approx(float(caster.get("speed_multiplier")), 1.0)
-	return opened and tuned and restored
+	return opened and defaults_ok and tuned and unbounded and restored
 
 
 func _spell_projectiles_distinct(scene: Node, player: Node) -> bool:

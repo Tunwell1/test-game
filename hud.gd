@@ -8,9 +8,21 @@ extends CanvasLayer
 
 const MARGIN := 44.0
 const BAR_WIDTH := 260.0
-## Режим подробного просмотра: F3 включает, −/= меняет время, [/] — скорость магии.
+## Режим подробного просмотра: F3 включает, −/= меняет время, [/] — скорость
+## магии. Ограничений-списков больше нет: шаг фиксированный, значения любые в
+## пределах движка. Списки оставлены только как ступени для Shift.
 const TIME_SCALES := [1.0, 0.5, 0.25, 0.1]
-const MAGIC_SPEEDS := [0.25, 0.5, 0.75, 1.0, 1.5, 2.0]
+const MAGIC_SPEEDS := [0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0]
+## Шаг −/= и [/] без Shift. Мелкий шаг нужен, чтобы ловить медленные скорости.
+const TIME_STEP := 0.05
+const MAGIC_STEP := 0.05
+## Нижняя граница: 0 недопустим (GameTree зависнет), берём практический минимум.
+const TIME_MIN := 0.01
+const MAGIC_MIN := 0.0
+## Значения по умолчанию. Время 1 = реальное, магия 0.1 = замедленный полёт
+## для разглядывания эффекта.
+const TIME_DEFAULT := 1.0
+const MAGIC_DEFAULT := 0.1
 
 var hud_canvas: Control
 var school_screen: Control
@@ -40,8 +52,8 @@ var _interface_scale := 1.0
 var _school_card_rects: Array[Rect2] = []
 var _hovered_school: int = -1
 var _debug_visible := false
-var _time_scale_index := 1
-var _magic_speed_index := 3
+var _time_scale := TIME_DEFAULT
+var _magic_speed := MAGIC_DEFAULT
 
 
 func _ready() -> void:
@@ -137,13 +149,15 @@ func _draw_debug(s: Vector2) -> void:
 
 	var serif := UiTheme.serif()
 	var caps := UiTheme.caps(1)
-	var mult: float = MAGIC_SPEEDS[_magic_speed_index]
+	var mult: float = _magic_speed
 	UiTheme.draw_text(hud_canvas, serif, Vector2(x + 12.0, y + 22.0),
 		"РЕЖИМ ПРОСМОТРА", 17, UiTheme.GOLD, 0.0)
 	UiTheme.draw_text(hud_canvas, caps, Vector2(x + 12.0, y + 44.0),
-		"ВРЕМЯ  %.2f×     [− / =]" % Engine.time_scale, 11, UiTheme.PARCHMENT, 0.0)
+		"ВРЕМЯ  %.2f×     [− / =]   Shift: ступени" % Engine.time_scale, 11,
+		UiTheme.PARCHMENT, 0.0)
 	UiTheme.draw_text(hud_canvas, caps, Vector2(x + 12.0, y + 62.0),
-		"МАГИЯ  %.2f×     [[ / ]]" % mult, 11, UiTheme.PARCHMENT, 0.0)
+		"МАГИЯ  %.2f×     [[ / ]]   Shift: ступени" % mult, 11,
+		UiTheme.PARCHMENT, 0.0)
 
 	var ids := ["fire_bolt", "wind_gust", "water_jet", "stone_shard"]
 	var labels := ["Огонь", "Ветер", "Вода", "Земля"]
@@ -513,10 +527,37 @@ func _draw_death_screen() -> void:
 # ===========================================================================
 
 func _apply_debug_settings() -> void:
-	Engine.time_scale = TIME_SCALES[_time_scale_index] if _debug_visible else 1.0
+	# В обычной игре — реальное время и скорость магии. В режиме просмотра
+	# действуют свободно выставленные значения.
+	Engine.time_scale = maxf(_time_scale, TIME_MIN) if _debug_visible else 1.0
 	if player != null and player.spell_caster != null:
-		player.spell_caster.speed_multiplier = MAGIC_SPEEDS[_magic_speed_index] \
-			if _debug_visible else 1.0
+		player.spell_caster.speed_multiplier = _magic_speed if _debug_visible else 1.0
+
+## Один шаг изменения значения. Без Shift — ровно на step; со Shift — на
+## соседнюю ступень из списка, а если ступени кончились, всё равно на step:
+## жёсткого потолка нет, только разумный предел движка.
+static func _step(from: float, step: float, values: Array, coarse: bool,
+		up: bool) -> float:
+	if not coarse:
+		return from + (step if up else -step)
+	var snapped := _snap(values, from, up)
+	if is_equal_approx(snapped, from):
+		return from + (step if up else -step)
+	return snapped
+
+## Ближайшая ступень из списка — для Shift+клавиша, чтобы не крутить по 0.05.
+static func _snap(values: Array, from: float, up: bool) -> float:
+	var sorted := values.duplicate()
+	sorted.sort()
+	if up:
+		for v in sorted:
+			if v > from + 0.0001:
+				return float(v)
+		return float(sorted[sorted.size() - 1])
+	for i in range(sorted.size() - 1, -1, -1):
+		if float(sorted[i]) < from - 0.0001:
+			return float(sorted[i])
+	return float(sorted[0])
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not event is InputEventKey:
@@ -531,15 +572,21 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not _debug_visible:
 		return
+	# Shift переключает по ступеням (1, 0.5, 0.25, 0.1), без Shift — мелкий шаг.
+	var coarse := key.shift_pressed
 	match key.physical_keycode:
 		KEY_MINUS:
-			_time_scale_index = clampi(_time_scale_index + 1, 0, TIME_SCALES.size() - 1)
+			_time_scale = _step(_time_scale, TIME_STEP, TIME_SCALES, coarse, false)
+			_time_scale = clampf(_time_scale, TIME_MIN, 16.0)
 		KEY_EQUAL:
-			_time_scale_index = clampi(_time_scale_index - 1, 0, TIME_SCALES.size() - 1)
+			_time_scale = _step(_time_scale, TIME_STEP, TIME_SCALES, coarse, true)
+			_time_scale = clampf(_time_scale, TIME_MIN, 16.0)
 		KEY_BRACKETLEFT:
-			_magic_speed_index = clampi(_magic_speed_index - 1, 0, MAGIC_SPEEDS.size() - 1)
+			_magic_speed = _step(_magic_speed, MAGIC_STEP, MAGIC_SPEEDS, coarse, false)
+			_magic_speed = clampf(_magic_speed, MAGIC_MIN, 16.0)
 		KEY_BRACKETRIGHT:
-			_magic_speed_index = clampi(_magic_speed_index + 1, 0, MAGIC_SPEEDS.size() - 1)
+			_magic_speed = _step(_magic_speed, MAGIC_STEP, MAGIC_SPEEDS, coarse, true)
+			_magic_speed = clampf(_magic_speed, MAGIC_MIN, 16.0)
 		_:
 			return
 	_apply_debug_settings()
