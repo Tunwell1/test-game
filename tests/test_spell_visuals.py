@@ -24,11 +24,14 @@ class SpellVisualTests(unittest.TestCase):
 
     def test_caster_delegates_visuals_to_projectile(self):
         text = CASTER.read_text(encoding="utf-8")
-        self.assertIn("proj.visual = str(data.get(\"visual\", \"\"))", text)
-        self.assertIn("proj.tint = data[\"color\"]", text)
-        self.assertIn("proj.configure()", text)
+        # Снаряд берётся из пула: configure() уже сделан при сборке, на касте
+        # остаются только перекраска, позиция и запуск.
+        self.assertIn("var proj := pool.acquire(str(data.get(\"visual\", \"\")))", text)
+        self.assertIn("proj.apply_tint(data[\"color\"], str(data.get(\"visual\", \"\")))", text)
+        self.assertIn("proj.launch()", text)
         self.assertNotIn("SphereMesh.new()", text)
-        self.assertIn("var parent: Node = player.get_tree().current_scene", text)
+        # Пул живёт в текущей сцене, а не под игроком: он общий для всех кастов.
+        self.assertIn("SpellPool.get_or_create(player.get_tree())", text)
 
     def test_projectile_has_four_distinct_shapes(self):
         text = PROJECTILE.read_text(encoding="utf-8")
@@ -111,7 +114,8 @@ class SpellVisualTests(unittest.TestCase):
         # Спавн снаряда перенесён в _launch, а не выполняется мгновенно.
         launch = text.split("func _launch(id: String) -> void:", 1)[1]
         self.assertIn("proj.speed = data[\"speed\"] * speed_multiplier", launch)
-        self.assertIn("proj.configure()", launch)
+        self.assertIn("pool.acquire(", launch)
+        self.assertIn("proj.launch()", launch)
 
     def test_player_has_cast_recoil(self):
         text = PLAYER.read_text(encoding="utf-8")
@@ -209,12 +213,30 @@ class SpellVisualTests(unittest.TestCase):
         self.assertIn("SpellAudio.flight_stream(visual)", projectile)
         self.assertIn('"SpellFlightAudio"', projectile)
 
+    def test_projectiles_are_pooled(self):
+        pool = (ROOT / "spell_pool.gd").read_text(encoding="utf-8")
+        self.assertIn("class_name SpellPool", pool)
+        self.assertIn("static func get_or_create(tree: SceneTree) -> SpellPool:", pool)
+        self.assertIn("func acquire(visual: String) -> SpellProjectile:", pool)
+        self.assertIn("func release(proj: SpellProjectile) -> void:", pool)
+        self.assertIn('GROUP := "spell_pool"', pool)
+        projectile = PROJECTILE.read_text(encoding="utf-8")
+        # Попадание больше не удаляет узел: снаряд возвращается в пул.
+        self.assertIn("func _recycle() -> void:", projectile)
+        self.assertIn("pool.call(\"release\", self)", projectile)
+        self.assertIn("func launch() -> void:", projectile)
+        self.assertNotIn("_spawn_impact(body, normal)\n\tqueue_free()", projectile)
+        caster = CASTER.read_text(encoding="utf-8")
+        self.assertIn("pool.acquire(", caster)
+        self.assertNotIn("SpellProjectile.new()", caster)
+
     def test_smoke_checks_distinct_projectiles(self):
         text = SMOKE.read_text(encoding="utf-8")
         self.assertIn("four schools create distinct projectiles with trails", text)
         self.assertIn("func _spell_projectiles_distinct(", text)
         self.assertIn('"SpellSmoke"', text)
         self.assertIn("hitstop", text)
+        self.assertIn("_pool_reuses_projectile(", text)
 
 
 if __name__ == "__main__":

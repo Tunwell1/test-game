@@ -170,22 +170,29 @@ func _launch(id: String) -> void:
 	var cam := player.camera
 	if cam == null:
 		return
-	var proj := SpellProjectile.new()
+	# Снаряд берётся из пула: меши, материалы и GPU-частицы уже собраны.
+	# В момент каста остаются только позиция и запуск.
+	var pool := SpellPool.get_or_create(player.get_tree())
+	if pool.get_parent() == null:
+		var host: Node = player.get_tree().current_scene
+		if host == null:
+			host = player.get_parent()
+		host.add_child(pool)
+	var proj := pool.acquire(str(data.get("visual", "")))
+	if proj == null:
+		return
 	proj.caster = player
 	proj.direction = -cam.global_transform.basis.z
 	proj.speed = data["speed"] * speed_multiplier
 	proj.damage = data["damage"]
 	proj.knockback = data["knockback"]
 	proj.effect = data["effect"]
-	proj.visual = str(data.get("visual", ""))
-	proj.tint = data["color"]
-	proj.configure()
-	var parent: Node = player.get_tree().current_scene
-	if parent == null:
-		parent = player.get_parent()
-	parent.add_child(proj)
+	proj.lifetime = 4.0
+	# apply_tint сам пересоберёт тело, если снаряд из пула был другой школы.
+	proj.apply_tint(data["color"], str(data.get("visual", "")))
 	# Снаряд стартует из точки сбора у «руки», а не из центра объектива.
 	proj.global_position = cast_hand_position(cam)
+	proj.launch()
 	spell_cast.emit(id)
 
 ## «Сбор» энергии у камеры: искры сжимаются и гаснут, вспышка света.

@@ -64,9 +64,12 @@ class RenderSharpnessTests(unittest.TestCase):
     def test_only_fire_emits_light(self):
         # Ни снаряд, ни удар не излучают свет, кроме огня.
         text = PROJECTILE.read_text(encoding="utf-8")
-        self.assertIn('var emits_light := visual == "fire"', text)
+        self.assertIn('func _emits_light() -> bool:', text)
+        self.assertIn('return visual == "fire" or visual == "lava"', text)
         self.assertIn('var impact_light := visual == "fire"', text)
         self.assertIn("if flash != null:", text)
+        # В configure свет создаётся только через проверку _emits_light().
+        self.assertIn("if _emits_light():", text)
 
     def test_particle_sprites_keep_geometric_silhouettes(self):
         text = PROJECTILE.read_text(encoding="utf-8")

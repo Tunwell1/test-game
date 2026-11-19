@@ -20,6 +20,13 @@ var _time: float = 0.0
 var _mesh: MeshInstance3D = null
 var _trail: GPUParticles3D = null
 var _light: OmniLight3D = null
+var _smoke: GPUParticles3D = null
+## Пул: снаряд не удаляется после попадания, а гаснет и возвращается в пул.
+var _pooled: bool = false
+var _body_key: String = ""
+## Базовый цвет материала: пул перекрашивает снаряд, не создавая новый.
+var _mesh_mat: Material = null
+var _emission_base: Color = Color.WHITE
 
 ## Процедурные спрайты частиц: жёсткие геометрические силуэты с тонкой
 ## сглаженной кромкой (одна треть пикселя). Никаких мягких ореолов —
@@ -96,12 +103,6 @@ func _ready() -> void:
 	collision_layer = 0
 	collision_mask = 1 | 4 | 8
 	body_entered.connect(_on_body_entered)
-	# Звук полёта запускается только после входа в дерево (иначе play() ошибется).
-	# Снаряд создаётся уже после антиципации, поэтому звук совпадает с вылетом.
-	var flight := SpellAudio.play_at(self, Vector3.ZERO,
-		SpellAudio.flight_stream(visual), -16.0, "SpellFlightAudio")
-	if flight != null:
-		flight.max_distance = 18.0
 
 func _exit_tree() -> void:
 	# Явно останавливаем петлю: иначе playback удерживает WAV после удаления.
@@ -109,16 +110,51 @@ func _exit_tree() -> void:
 		if child is AudioStreamPlayer3D:
 			(child as AudioStreamPlayer3D).stop()
 
+## Материал тела зависит от школы; форма у камня и огня общая, но цвет разный,
+## поэтому пул различает снаряды по ключу «школа + форма».
+static func body_key(visual: String) -> String:
+	return visual if visual != "" else "default"
+
 func configure() -> void:
+	_body_key = body_key(visual)
 	var shape := CollisionShape3D.new()
 	var sphere := SphereShape3D.new()
 	sphere.radius = 0.2
 	shape.shape = sphere
 	add_child(shape)
+	build_visuals()
 
+## Светится только огонь — по названию школы, а не по конкретному заклинанию,
+## чтобы производные школы (лава, молния) могли светиться, когда появятся.
+func _emits_light() -> bool:
+	return visual == "fire" or visual == "lava" or visual == "lightning"
+
+## Пул переиспользует снаряд под другую школу: тело и след пересобираются,
+## материалы создаются один раз за переключение, а не на каждый каст.
+func rebuild_for(new_visual: String) -> void:
+	if new_visual == visual and _mesh != null:
+		return
+	visual = new_visual
+	_body_key = body_key(new_visual)
+	if _mesh != null:
+		_mesh.queue_free()
+		_mesh = null
+	if _trail != null:
+		_trail.queue_free()
+		_trail = null
+	if _smoke != null:
+		_smoke.queue_free()
+		_smoke = null
+	if _light != null:
+		_light.queue_free()
+		_light = null
+	build_visuals()
+
+func build_visuals() -> void:
 	_mesh = MeshInstance3D.new()
 	_mesh.mesh = _build_mesh()
-	_mesh.material_override = _body_material()
+	_mesh_mat = _body_material()
+	_mesh.material_override = _mesh_mat
 	# Снаряд не появляется готовым: первые 60 мс он «выстреливается» из руки,
 	# иначе глаз читает мгновенную подмену объекта, а не бросок.
 	_mesh.scale = Vector3.ONE * 0.35
@@ -126,25 +162,94 @@ func configure() -> void:
 		# CapsuleMesh длинной осью идёт по Y — поворачиваем её по полёту.
 		_mesh.rotation.x = PI * 0.5
 	add_child(_mesh)
-
 	_trail = _make_trail()
 	if _trail != null:
 		add_child(_trail)
-
-	# Источником света может быть только огонь. Светящийся камень, вода или
-	# ветер — главный признак «sci-fi»: это ломает физику сильнее всего.
-	# Остальные школы освещены солнцем и сами ничего не подсвечивают.
-	var emits_light := visual == "fire"
-	if emits_light:
+	if _emits_light():
 		_light = OmniLight3D.new()
 		_light.light_color = tint
 		_light.omni_range = 5.4
 		_light.light_energy = 2.6
 		_light.omni_attenuation = 1.4
 		add_child(_light)
+		_smoke = _make_smoke()
+		add_child(_smoke)
 
-	if visual == "fire":
-		add_child(_make_smoke())
+## Перекраска без пересборки материалов: пул переиспользует тело снаряда,
+## а школа у него может быть другой.
+func apply_tint(new_tint: Color, new_visual: String = "") -> void:
+	tint = new_tint
+	if new_visual != "":
+		rebuild_for(new_visual)
+	if _mesh_mat is ShaderMaterial:
+		var mat := _mesh_mat as ShaderMaterial
+		var alpha := 1.0 if visual == "fire" else 0.72
+		mat.set_shader_parameter("tint", Color(tint.r, tint.g, tint.b, alpha))
+	elif _mesh_mat is StandardMaterial3D:
+		(_mesh_mat as StandardMaterial3D).albedo_color = tint
+	# Частицы наследуют цвет через вершинный цвет материала — нужно обновить
+	# альбедо у следов и дыма, иначе новый снаряд полетит в цвете прошлого.
+	if _trail != null:
+		_set_particle_color(_trail, Color(tint.r, tint.g, tint.b, 0.85))
+	if _smoke != null:
+		_set_particle_color(_smoke, Color(0.16, 0.14, 0.13, 0.26))
+	if _light != null:
+		_light.light_color = tint
+
+func _set_particle_color(particles: GPUParticles3D, color: Color) -> void:
+	var quad := particles.draw_pass_1 as QuadMesh
+	if quad == null or quad.material == null:
+		return
+	var mat := quad.material as StandardMaterial3D
+	if mat == null:
+		return
+	if mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD:
+		# Аддитивные (огонь) несут HDR-множитель, иначе glow их не видит.
+		mat.albedo_color = Color(color.r, color.g, color.b,
+			color.a) * Color(1.7, 1.7, 1.7, 1.0)
+	else:
+		mat.albedo_color = color
+
+## Запуск полёта. Вызывается после входа в дерево, поэтому звук стартует
+## ровно в момент вылета — и для нового объекта, и для взятого из пула.
+func launch() -> void:
+	_spent = false
+	_time = 0.0
+	visible = true
+	set_physics_process(true)
+	if _mesh != null:
+		_mesh.scale = Vector3.ONE * 0.35
+	if _trail != null:
+		_trail.restart()
+	if _smoke != null:
+		_smoke.restart()
+	var flight := SpellAudio.play_at(self, Vector3.ZERO,
+		SpellAudio.flight_stream(visual), -16.0, "SpellFlightAudio")
+	if flight != null:
+		flight.max_distance = 18.0
+
+## Возврат в пул: снаряд гаснет и засыпает вместо queue_free. Визуальные
+## эффекты попадания уже отвязаны от снаряда и живут в сцене сами.
+func _recycle() -> void:
+	_spent = true
+	set_physics_process(false)
+	# Звуки полёта гасим сразу: висящая петля выдаёт, что объект жив.
+	for child in get_children():
+		if child is AudioStreamPlayer3D:
+			(child as AudioStreamPlayer3D).stop()
+			child.queue_free()
+	if _trail != null:
+		_trail.emitting = false
+	if _smoke != null:
+		_smoke.emitting = false
+	visible = false
+	if _pooled:
+		# Настоящий пул: убираем из сцены и держим в резерве.
+		var pool := get_tree().get_first_node_in_group("spell_pool")
+		if pool != null and pool.has_method("release"):
+			pool.call("release", self)
+			return
+	queue_free()
 
 # --- Форма снаряда ---------------------------------------------------------
 
@@ -551,7 +656,7 @@ func _physics_process(delta: float) -> void:
 	global_position = to
 	lifetime -= delta
 	if lifetime <= 0.0:
-		queue_free()
+		_recycle()
 
 func _on_body_entered(body: Node3D) -> void:
 	_apply_hit(body)
@@ -570,7 +675,7 @@ func _apply_hit(body: Node3D, normal: Vector3 = Vector3.ZERO) -> void:
 	if effect != "" and body.has_method("on_spell_effect"):
 		body.call("on_spell_effect", effect)
 	_spawn_impact(body, normal)
-	queue_free()
+	_recycle()
 
 # --- Попадание -------------------------------------------------------------
 

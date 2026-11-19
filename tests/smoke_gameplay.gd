@@ -14,6 +14,18 @@ const VISUAL_BODIES := [
 var _failures: Array[String] = []
 var _skipped: Array[String] = []
 
+## Снаряды больше не лежат в корне сцены: они живут в пуле (`SpellPool`).
+## Помощник собирает все живые и не спящие снаряды пула.
+func _live_projectiles() -> Array:
+	var found: Array = []
+	var pools := get_root().get_tree().get_nodes_in_group("spell_pool")
+	for pool in pools:
+		for child in pool.get_children():
+			if child is SpellProjectile and child.visible \
+					and not child.is_queued_for_deletion():
+				found.append(child)
+	return found
+
 
 func _initialize() -> void:
 	call_deferred("_run")
@@ -52,6 +64,8 @@ func _run() -> void:
 	if player != null:
 		_check(await _spell_projectiles_distinct(scene, player),
 			"four schools create distinct projectiles with trails")
+		_check(await _pool_reuses_projectile(scene, player),
+			"projectile pool reuses objects instead of allocating per cast")
 
 	var enemies := get_nodes_in_group("enemies")
 	print("INFO: main scene registers %d enemies" % enemies.size())
@@ -185,8 +199,8 @@ func _spell_projectiles_distinct(scene: Node, player: Node) -> bool:
 			ok = false
 		await create_timer(0.25).timeout
 		var found := false
-		for child in scene.get_children():
-			if child is SpellProjectile and str(child.get("visual")) == str(expected[id]):
+		for child in _live_projectiles():
+			if str(child.get("visual")) == str(expected[id]):
 				var mesh_node = child.get("_mesh")
 				var trail := child.find_child("SpellTrail", true, false)
 				var flight_audio := child.find_child("SpellFlightAudio", true, false)
@@ -195,7 +209,9 @@ func _spell_projectiles_distinct(scene: Node, player: Node) -> bool:
 						and flight_audio != null \
 						and (str(expected[id]) != "fire" or smoke != null):
 					found = true
-				child.queue_free()
+				# Возвращаем снаряд в пул, иначе он переиспользуется раньше
+				# времени и следующий каст возьмёт «занятый» объект.
+				child.call("_recycle")
 		if not found:
 			ok = false
 
@@ -207,9 +223,8 @@ func _spell_projectiles_distinct(scene: Node, player: Node) -> bool:
 	caster.call("cast", "fire_bolt")
 	await create_timer(0.25).timeout
 	var impact_ok := false
-	for child in scene.get_children():
-		if child is SpellProjectile and not child.is_queued_for_deletion():
-			child.call("_apply_hit", dummy, Vector3.UP)
+	for child in _live_projectiles():
+		child.call("_apply_hit", dummy, Vector3.UP)
 			if scene.find_child("SpellImpact", true, false) != null \
 					and scene.find_child("ImpactFlash", true, false) != null \
 					and scene.find_child("ImpactAudio", true, false) != null \
@@ -225,8 +240,8 @@ func _spell_projectiles_distinct(scene: Node, player: Node) -> bool:
 	caster.call("cast", "stone_shard")
 	await create_timer(0.25).timeout
 	var earth_proj: Node = null
-	for child in scene.get_children():
-		if child is SpellProjectile and str(child.get("visual")) == "earth":
+	for child in _live_projectiles():
+		if str(child.get("visual")) == "earth":
 			earth_proj = child
 			break
 	if earth_proj == null:
@@ -239,8 +254,31 @@ func _spell_projectiles_distinct(scene: Node, player: Node) -> bool:
 	var restored := is_equal_approx(Engine.time_scale, 1.0)
 	if not slowed or not restored:
 		ok = false
-	earth_proj.queue_free()
+	earth_proj.call("_recycle")
 	return ok
+
+
+## Пул: повторный каст не должен создавать новый узел снаряда.
+func _pool_reuses_projectile(scene: Node, player: Node) -> bool:
+	var caster = player.get("spell_caster")
+	if caster == null:
+		return false
+	player.set("mana", 999.0)
+	var pools := get_root().get_tree().get_nodes_in_group("spell_pool")
+	if pools.is_empty():
+		return false
+	var pool: Node = pools[0]
+	var before := pool.get_child_count()
+	for i in 3:
+		caster.set("cooldown_timer", 0.0)
+		caster.call("cast", "fire_bolt")
+		await create_timer(0.25).timeout
+		for child in _live_projectiles():
+			child.call("_recycle")
+	var after := pool.get_child_count()
+	var stats: Dictionary = pool.call("stats")
+	# Один-два объекта на школу, а не по одному на каждый из трёх кастов.
+	return after == before and int(stats["total"]) <= 4
 
 
 func _ambient_vfx_ready(player: Node) -> bool:
