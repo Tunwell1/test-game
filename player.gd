@@ -105,6 +105,8 @@ var land_offset: float = 0.0
 var step_offset: float = 0.0
 var land_vel: float = 0.0
 var land_pitch: float = 0.0
+## Кратковременный пинок FOV при колдовстве (отдача), затухает сам.
+var cast_fov_kick: float = 0.0
 var bob_y: float = 0.0
 var fall_speed: float = 0.0
 var _interact_target: Object = null
@@ -254,7 +256,7 @@ func _setup_ambient_vfx() -> void:
 
 
 func _dust_dot_texture() -> ImageTexture:
-	var size := 32
+	var size := 64
 	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
 	var center := Vector2(float(size - 1) * 0.5, float(size - 1) * 0.5)
 	for y in size:
@@ -567,13 +569,19 @@ func _apply_camera_feel(delta: float) -> void:
 	var target_pitch := clampf(velocity.y * 0.004, -0.04, 0.04) - sprint_blend * deg_to_rad(sprint_lean_deg) + land_pitch
 	camera.rotation.x = lerpf(camera.rotation.x, target_pitch, delta * 10.0)
 
+## Короткая отдача при колдовстве: пинок FOV и лёгкий подброс камеры вверх.
+func apply_cast_recoil(fov_kick: float = 2.5, pitch_kick: float = 0.03) -> void:
+	cast_fov_kick = maxf(cast_fov_kick, fov_kick)
+	land_pitch = clampf(land_pitch + pitch_kick, -0.12, 0.12)
+
 func _apply_fov_change(delta: float) -> void:
 	if not fov_change:
 		return
 
 	# FOV следует за плавным sprint_blend, а не за переключением состояния
-	var target_fov: float = default_fov + sprint_fov_boost * smoothstep(0.0, 1.0, sprint_blend)
+	var target_fov: float = default_fov + sprint_fov_boost * smoothstep(0.0, 1.0, sprint_blend) + cast_fov_kick
 	camera.fov = lerpf(camera.fov, target_fov, delta * fov_transition_speed)
+	cast_fov_kick = lerpf(cast_fov_kick, 0.0, delta * 12.0)
 
 func _handle_footsteps(delta: float) -> void:
 	if not footstep_audio or not is_on_floor():

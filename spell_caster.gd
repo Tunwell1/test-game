@@ -9,19 +9,22 @@ signal selected_changed(spell_id: String)
 
 const M := MagicBook.School
 
+## Антиципация перед вылетом снаряда: короткий «сбор» энергии и отдача камеры.
+const CAST_WINDUP := 0.12
+
 ## Заклинания. noise — шум для стелса (магия безмолвна, поэтому по умолчанию почти 0).
 const SPELLS: Dictionary = {
 	"fire_bolt": {"name": "Огненный сгусток", "school": M.FIRE, "mana": 15.0, "cooldown": 0.6,
-		"damage": 20.0, "speed": 22.0, "knockback": 0.0, "effect": "ignite",
+		"damage": 20.0, "speed": 22.0, "knockback": 0.0, "effect": "ignite", "visual": "fire",
 		"color": Color(1.0, 0.45, 0.1), "noise": 0.05},
 	"wind_gust": {"name": "Порыв ветра", "school": M.WIND, "mana": 10.0, "cooldown": 0.5,
-		"damage": 2.0, "speed": 30.0, "knockback": 12.0, "effect": "push",
+		"damage": 2.0, "speed": 30.0, "knockback": 12.0, "effect": "push", "visual": "wind",
 		"color": Color(0.8, 0.95, 1.0), "noise": 0.0},
 	"water_jet": {"name": "Водяная струя", "school": M.WATER, "mana": 10.0, "cooldown": 0.4,
-		"damage": 8.0, "speed": 26.0, "knockback": 3.0, "effect": "extinguish",
+		"damage": 8.0, "speed": 26.0, "knockback": 3.0, "effect": "extinguish", "visual": "water",
 		"color": Color(0.2, 0.5, 1.0), "noise": 0.05},
 	"stone_shard": {"name": "Каменный осколок", "school": M.EARTH, "mana": 20.0, "cooldown": 0.9,
-		"damage": 25.0, "speed": 16.0, "knockback": 6.0, "effect": "",
+		"damage": 25.0, "speed": 16.0, "knockback": 6.0, "effect": "", "visual": "earth",
 		"color": Color(0.5, 0.4, 0.3), "noise": 0.15},
 }
 
@@ -29,6 +32,8 @@ const SPELLS: Dictionary = {
 
 var cooldown_timer: float = 0.0
 var selected_index: int = 0
+## Множитель скорости снарядов: меняется в режиме отладки (F3 в HUD).
+var speed_multiplier: float = 1.0
 ## Шум от последнего колдовства, затухает; учитывается в Player.get_noise_level().
 var magic_noise: float = 0.0
 
@@ -132,34 +137,98 @@ func cast(id: String) -> bool:
 	magic_noise = maxf(magic_noise, data["noise"])
 
 	var cam := player.camera
+	_spawn_cast_fx(cam, data["color"])
+	SpellAudio.play_at(player, Vector3.ZERO,
+		SpellAudio.cast_stream(str(data.get("visual", ""))), -8.0, "CastAudio")
+	player.apply_cast_recoil(2.5, 0.03)
+	# Снаряд вылетает после короткой антиципации, а не мгновенно.
+	get_tree().create_timer(CAST_WINDUP).timeout.connect(_launch.bind(id))
+	return true
+
+## Вылет снаряда после антиципации. Направление пересчитывается в момент
+## вылета: игрок мог повернуть камеру за доли секунды «сбора».
+func _launch(id: String) -> void:
+	if player == null or not is_instance_valid(player) or player.is_dead:
+		return
+	if not SPELLS.has(id):
+		return
+	var data: Dictionary = SPELLS[id]
+	var cam := player.camera
+	if cam == null:
+		return
 	var proj := SpellProjectile.new()
 	proj.caster = player
 	proj.direction = -cam.global_transform.basis.z
-	proj.speed = data["speed"]
+	proj.speed = data["speed"] * speed_multiplier
 	proj.damage = data["damage"]
 	proj.knockback = data["knockback"]
 	proj.effect = data["effect"]
-	var shape := CollisionShape3D.new()
-	var sphere := SphereShape3D.new()
-	sphere.radius = 0.2
-	shape.shape = sphere
-	proj.add_child(shape)
-	var mesh := MeshInstance3D.new()
-	var sm := SphereMesh.new()
-	sm.radius = 0.15
-	sm.height = 0.3
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = data["color"]
-	mat.emission_enabled = true
-	mat.emission = data["color"]
-	sm.material = mat
-	mesh.mesh = sm
-	proj.add_child(mesh)
-	var light := OmniLight3D.new()
-	light.light_color = data["color"]
-	light.omni_range = 4.0
-	proj.add_child(light)
-	player.get_tree().current_scene.add_child(proj)
+	proj.visual = str(data.get("visual", ""))
+	proj.tint = data["color"]
+	proj.configure()
+	var parent: Node = player.get_tree().current_scene
+	if parent == null:
+		parent = player.get_parent()
+	parent.add_child(proj)
 	proj.global_position = cam.global_position + proj.direction * 0.8
 	spell_cast.emit(id)
-	return true
+
+## «Сбор» энергии у камеры: искры сжимаются и гаснут, вспышка света.
+func _spawn_cast_fx(cam: Camera3D, tint: Color) -> void:
+	if cam == null:
+		return
+	var parent: Node = get_tree().current_scene
+	if parent == null:
+		parent = player.get_parent()
+	if parent == null:
+		return
+	var fx := Node3D.new()
+	fx.name = "CastGather"
+	parent.add_child(fx)
+	fx.global_position = cam.global_position - cam.global_transform.basis.z * 0.7
+
+	var light := OmniLight3D.new()
+	light.light_color = tint
+	light.light_energy = 1.6
+	light.omni_range = 2.5
+	fx.add_child(light)
+
+	var particles := GPUParticles3D.new()
+	particles.amount = 14
+	particles.lifetime = CAST_WINDUP + 0.05
+	particles.one_shot = true
+	particles.local_coords = false
+	particles.visibility_aabb = AABB(Vector3(-1.0, -1.0, -1.0), Vector3(2.0, 2.0, 2.0))
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.12, 0.12)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = SpellProjectile._particle_texture("shard")
+	mat.albedo_color = Color(tint.r, tint.g, tint.b, 0.9)
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.alpha_scissor_threshold = 0.5
+	mat.vertex_color_use_as_albedo = true
+	quad.material = mat
+	particles.draw_pass_1 = quad
+	var process := ParticleProcessMaterial.new()
+	process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	process.emission_sphere_radius = 0.35
+	process.direction = Vector3.ZERO
+	process.spread = 180.0
+	process.initial_velocity_min = 0.05
+	process.initial_velocity_max = 0.2
+	process.gravity = Vector3.ZERO
+	process.scale_min = 0.6
+	process.scale_max = 1.2
+	process.color_ramp = SpellProjectile._fade_ramp(0.85)
+	# Частицы сжимаются в точку — читается как «втягивание» энергии.
+	process.scale_curve = SpellProjectile._scale_curve(1.0, 0.1)
+	particles.process_material = process
+	particles.emitting = true
+	fx.add_child(particles)
+
+	var tween := fx.create_tween()
+	tween.tween_property(light, "light_energy", 0.0, CAST_WINDUP + 0.08)
+	get_tree().create_timer(0.5).timeout.connect(fx.queue_free)

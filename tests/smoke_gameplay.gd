@@ -37,6 +37,9 @@ func _run() -> void:
 		var school_layer = hud.get("school_screen")
 		_check(school_layer != null and school_layer.mouse_filter == Control.MOUSE_FILTER_STOP,
 			"school choice accepts mouse input")
+	if player != null and hud != null:
+		_check(_debug_controls_work(hud, player),
+			"slow motion and spell speed debug controls")
 	if player != null:
 		var magic_book = player.get("magic_book")
 		if magic_book != null and int(magic_book.get("primary_school")) == -1:
@@ -46,6 +49,9 @@ func _run() -> void:
 	_check(player != null, "player exists in main scene")
 	_check(_ambient_vfx_ready(player), "warm light and dust motes are attached to the player")
 	_check(_first_person_camera_ready(player), "camera sits at eye level with no spring arm")
+	if player != null:
+		_check(await _spell_projectiles_distinct(scene, player),
+			"four schools create distinct projectiles with trails")
 
 	var enemies := get_nodes_in_group("enemies")
 	print("INFO: main scene registers %d enemies" % enemies.size())
@@ -130,6 +136,111 @@ func _first_person_camera_ready(player: Node) -> bool:
 		return false
 	var ray := cam.get_node_or_null("InteractRay") as RayCast3D
 	return ray != null and absf(cam.position.x) < 0.2 and absf(cam.position.z) < 0.2
+
+
+func _debug_controls_work(hud: Node, player: Node) -> bool:
+	var caster = player.get("spell_caster")
+	if caster == null:
+		return false
+	var f3 := InputEventKey.new()
+	f3.physical_keycode = KEY_F3
+	f3.pressed = true
+	hud.call("_unhandled_input", f3)
+	var opened := Engine.time_scale < 1.0
+
+	var minus := InputEventKey.new()
+	minus.physical_keycode = KEY_MINUS
+	minus.pressed = true
+	hud.call("_unhandled_input", minus)
+	var bracket := InputEventKey.new()
+	bracket.physical_keycode = KEY_BRACKETRIGHT
+	bracket.pressed = true
+	hud.call("_unhandled_input", bracket)
+	var tuned := Engine.time_scale < 1.0 and float(caster.get("speed_multiplier")) > 1.0
+
+	hud.call("_unhandled_input", f3)
+	var restored := is_equal_approx(Engine.time_scale, 1.0) \
+		and is_equal_approx(float(caster.get("speed_multiplier")), 1.0)
+	return opened and tuned and restored
+
+
+func _spell_projectiles_distinct(scene: Node, player: Node) -> bool:
+	var caster = player.get("spell_caster")
+	if caster == null:
+		return false
+	player.set("mana", 999.0)
+	var expected := {
+		"fire_bolt": "fire", "wind_gust": "wind",
+		"water_jet": "water", "stone_shard": "earth",
+	}
+	var ok := true
+	for id in expected:
+		caster.set("cooldown_timer", 0.0)
+		caster.call("cast", id)
+		# Антиципация: сначала эффект «сбора», снаряд вылетает после CAST_WINDUP.
+		if scene.find_child("CastGather", true, false) == null:
+			ok = false
+		# Каст озвучен процедурным сэмплом школы.
+		if player.find_child("CastAudio", true, false) == null:
+			ok = false
+		await create_timer(0.25).timeout
+		var found := false
+		for child in scene.get_children():
+			if child is SpellProjectile and str(child.get("visual")) == str(expected[id]):
+				var mesh_node = child.get("_mesh")
+				var trail := child.find_child("SpellTrail", true, false)
+				var flight_audio := child.find_child("SpellFlightAudio", true, false)
+				var smoke := child.find_child("SpellSmoke", true, false)
+				if mesh_node != null and mesh_node.mesh != null and trail != null \
+						and flight_audio != null \
+						and (str(expected[id]) != "fire" or smoke != null):
+					found = true
+				child.queue_free()
+		if not found:
+			ok = false
+
+	# Попадание должно создавать отдельный эффект со вспышкой света,
+	# звуком и декалью следа, а не просто исчезать.
+	var dummy := Node3D.new()
+	scene.add_child(dummy)
+	caster.set("cooldown_timer", 0.0)
+	caster.call("cast", "fire_bolt")
+	await create_timer(0.25).timeout
+	var impact_ok := false
+	for child in scene.get_children():
+		if child is SpellProjectile and not child.is_queued_for_deletion():
+			child.call("_apply_hit", dummy, Vector3.UP)
+			if scene.find_child("SpellImpact", true, false) != null \
+					and scene.find_child("ImpactFlash", true, false) != null \
+					and scene.find_child("ImpactAudio", true, false) != null \
+					and scene.find_child("SpellDecal", true, false) != null:
+				impact_ok = true
+			break
+	if not impact_ok:
+		ok = false
+	dummy.queue_free()
+
+	# Тяжёлый камень даёт короткий hitstop и возвращает время обратно.
+	caster.set("cooldown_timer", 0.0)
+	caster.call("cast", "stone_shard")
+	await create_timer(0.25).timeout
+	var earth_proj: Node = null
+	for child in scene.get_children():
+		if child is SpellProjectile and str(child.get("visual")) == "earth":
+			earth_proj = child
+			break
+	if earth_proj == null:
+		return false
+	# Сам снаряд за 0.25 с уже мог врезаться в стену — проверяем сам hitstop,
+	# чтобы тест не зависел от геометрии арены.
+	earth_proj.call("_heavy_hitstop")
+	var slowed := Engine.time_scale < 1.0
+	await create_timer(0.1, true, false, true).timeout
+	var restored := is_equal_approx(Engine.time_scale, 1.0)
+	if not slowed or not restored:
+		ok = false
+	earth_proj.queue_free()
+	return ok
 
 
 func _ambient_vfx_ready(player: Node) -> bool:

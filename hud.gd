@@ -8,6 +8,9 @@ extends CanvasLayer
 
 const MARGIN := 44.0
 const BAR_WIDTH := 260.0
+## Режим подробного просмотра: F3 включает, −/= меняет время, [/] — скорость магии.
+const TIME_SCALES := [1.0, 0.5, 0.25, 0.1]
+const MAGIC_SPEEDS := [0.25, 0.5, 0.75, 1.0, 1.5, 2.0]
 
 var hud_canvas: Control
 var school_screen: Control
@@ -29,6 +32,9 @@ var _school_pause_active := false
 var _interface_scale := 1.0
 var _school_card_rects: Array[Rect2] = []
 var _hovered_school: int = -1
+var _debug_visible := false
+var _time_scale_index := 1
+var _magic_speed_index := 3
 
 
 func _ready() -> void:
@@ -50,6 +56,7 @@ func _ready() -> void:
 	death_screen.draw.connect(_draw_death_screen)
 	get_viewport().size_changed.connect(_apply_interface_scale)
 	_apply_interface_scale()
+	_apply_debug_settings()
 
 func set_interface_scale(value: float) -> void:
 	_interface_scale = clampf(value, 0.5, 2.0)
@@ -83,6 +90,9 @@ func _make_layer() -> Control:
 func _exit_tree() -> void:
 	if _school_pause_active and is_instance_valid(get_tree()):
 		get_tree().paused = false
+	Engine.time_scale = 1.0
+	if player != null and player.spell_caster != null:
+		player.spell_caster.speed_multiplier = 1.0
 
 # ===========================================================================
 #  HUD
@@ -103,6 +113,35 @@ func _draw_hud() -> void:
 	_draw_resources(serif, caps, caps_tight, s)
 	_draw_reticle(caps_tight, s)
 	_draw_spell_slot(serif, caps, caps_tight, s)
+	if _debug_visible:
+		_draw_debug(s)
+
+func _draw_debug(s: Vector2) -> void:
+	var x := MARGIN
+	var y := 74.0
+	var w := 340.0
+	var h := 148.0
+	hud_canvas.draw_rect(Rect2(x, y, w, h), Color(0.018, 0.026, 0.040, 0.86), true)
+	hud_canvas.draw_line(Vector2(x, y), Vector2(x + w, y),
+		UiTheme.fade(UiTheme.GOLD, 0.55), 1.0, true)
+
+	var serif := UiTheme.serif()
+	var caps := UiTheme.caps(1)
+	var mult: float = MAGIC_SPEEDS[_magic_speed_index]
+	UiTheme.draw_text(hud_canvas, serif, Vector2(x + 12.0, y + 22.0),
+		"РЕЖИМ ПРОСМОТРА", 17, UiTheme.GOLD, 0.0)
+	UiTheme.draw_text(hud_canvas, caps, Vector2(x + 12.0, y + 44.0),
+		"ВРЕМЯ  %.2f×     [− / =]" % Engine.time_scale, 11, UiTheme.PARCHMENT, 0.0)
+	UiTheme.draw_text(hud_canvas, caps, Vector2(x + 12.0, y + 62.0),
+		"МАГИЯ  %.2f×     [[ / ]]" % mult, 11, UiTheme.PARCHMENT, 0.0)
+
+	var ids := ["fire_bolt", "wind_gust", "water_jet", "stone_shard"]
+	var labels := ["Огонь", "Ветер", "Вода", "Земля"]
+	for i in 4:
+		var base := float(SpellCaster.SPELLS[ids[i]]["speed"])
+		var line := "%s   %.0f → %.0f м/с" % [labels[i], base, base * mult]
+		UiTheme.draw_text(hud_canvas, caps, Vector2(x + 12.0, y + 88.0 + float(i) * 14.0),
+			line, 11, UiTheme.fade(UiTheme.PARCHMENT, 0.82), 0.0)
 
 func _draw_resources(serif: Font, caps: Font, caps_tight: Font, s: Vector2) -> void:
 	var x := MARGIN + 2.0
@@ -401,6 +440,39 @@ func _draw_death_screen() -> void:
 # ===========================================================================
 #  Состояние
 # ===========================================================================
+
+func _apply_debug_settings() -> void:
+	Engine.time_scale = TIME_SCALES[_time_scale_index] if _debug_visible else 1.0
+	if player != null and player.spell_caster != null:
+		player.spell_caster.speed_multiplier = MAGIC_SPEEDS[_magic_speed_index] \
+			if _debug_visible else 1.0
+
+func _unhandled_input(event: InputEvent) -> void:
+	if not event is InputEventKey:
+		return
+	var key := event as InputEventKey
+	if not key.pressed or key.echo:
+		return
+	if key.physical_keycode == KEY_F3:
+		_debug_visible = not _debug_visible
+		_apply_debug_settings()
+		get_viewport().set_input_as_handled()
+		return
+	if not _debug_visible:
+		return
+	match key.physical_keycode:
+		KEY_MINUS:
+			_time_scale_index = clampi(_time_scale_index + 1, 0, TIME_SCALES.size() - 1)
+		KEY_EQUAL:
+			_time_scale_index = clampi(_time_scale_index - 1, 0, TIME_SCALES.size() - 1)
+		KEY_BRACKETLEFT:
+			_magic_speed_index = clampi(_magic_speed_index - 1, 0, MAGIC_SPEEDS.size() - 1)
+		KEY_BRACKETRIGHT:
+			_magic_speed_index = clampi(_magic_speed_index + 1, 0, MAGIC_SPEEDS.size() - 1)
+		_:
+			return
+	_apply_debug_settings()
+	get_viewport().set_input_as_handled()
 
 func _process(delta: float) -> void:
 	if player == null:
