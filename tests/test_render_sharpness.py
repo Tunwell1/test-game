@@ -78,6 +78,12 @@ class RenderSharpnessTests(unittest.TestCase):
         self.assertIn("particles.draw_passes = 1", text)
         self.assertNotIn("draw_pass_2", text)
 
+    def test_contact_shadows_enabled(self):
+        # Без SSAO магия «висит» над полом: контактных теней нет вообще.
+        text = SCENE.read_text(encoding="utf-8")
+        self.assertIn("ssao_enabled = true", text)
+        self.assertIn("ssao_radius = 1.2", text)
+
     def test_decals_are_high_res(self):
         text = PROJECTILE.read_text(encoding="utf-8")
         self.assertIn("var size := 256", text)

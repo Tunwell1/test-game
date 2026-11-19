@@ -15,6 +15,8 @@ const MAGIC_SPEEDS := [0.25, 0.5, 0.75, 1.0, 1.5, 2.0]
 var hud_canvas: Control
 var school_screen: Control
 var death_screen: Control
+## Экранная постобработка магии: вспышка, виньетка, хроматика на ударе.
+var screen_fx: SpellScreenFx = null
 
 var spell_name: String = ""
 var spell_school: String = ""
@@ -64,6 +66,7 @@ func _ready() -> void:
 	_apply_debug_settings()
 	if player != null and player.spell_caster != null:
 		player.spell_caster.spell_cast.connect(_on_spell_cast)
+	screen_fx = SpellScreenFx.create(self)
 
 func set_interface_scale(value: float) -> void:
 	_interface_scale = clampf(value, 0.5, 2.0)
@@ -209,6 +212,8 @@ func _on_spell_cast(_id: String) -> void:
 	# Сигнал приходит в момент вылета снаряда: прицел разряжается расходящимся
 	# кольцом, и кисть «отпускает» накопленное.
 	_cast_pulse = 1.0
+	if screen_fx != null:
+		screen_fx.on_cast(spell_tint)
 
 ## Попадание по врагу читается по падению HP у цели под прицелом:
 ## отдельного сигнала от снаряда не требуется.
@@ -242,6 +247,10 @@ func _track_enemy_hit() -> void:
 	var hp := float(target.get("health"))
 	if hp < _last_enemy_health - 0.5:
 		_hit_pulse = 1.0
+		if screen_fx != null and target is Node3D:
+			var dist := (target as Node3D).global_position.distance_to(player.global_position)
+			var heavy := (_last_enemy_health - hp) >= 20.0
+			screen_fx.on_impact(spell_tint, dist, heavy)
 	_last_enemy_health = hp
 
 ## Прицел: точка, четыре засечки; при цели — раскрытое кольцо и подсказка.

@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CASTER = ROOT / "spell_caster.gd"
 PROJECTILE = ROOT / "spell_projectile.gd"
+HUD = ROOT / "hud.gd"
 PLAYER = ROOT / "player.gd"
 SMOKE = ROOT / "tests" / "smoke_gameplay.gd"
 
@@ -177,8 +178,12 @@ class SpellVisualTests(unittest.TestCase):
         self.assertIn("static var _spell_shader: Shader = null", text)
         self.assertIn("shader.code = \"\"\"", text)
         self.assertIn("shader_type spatial;", text)
-        self.assertIn("float rim = step(0.80", text)
-        self.assertIn("float facet = step(0.0, NORMAL.y)", text)
+        # Кромка силуэта — плавный rim, а не ступенька.
+        self.assertIn("float rim = pow(1.0 - facing, 2.5);", text)
+        # Тело обязано получать свет сцены: unshaded ломал всё.
+        self.assertNotIn("render_mode unshaded", text)
+        self.assertIn("render_mode blend_mix, cull_disabled, depth_draw_opaque;", text)
+        self.assertIn("ROUGHNESS = 0.04;", text)
         self.assertNotIn("noise3(", text)
         self.assertIn("uniform float mode = 0.0;", text)
         self.assertIn("var modes := {\"fire\": 0.0, \"wind\": 1.0, \"water\": 2.0}", text)
@@ -212,6 +217,38 @@ class SpellVisualTests(unittest.TestCase):
         projectile = PROJECTILE.read_text(encoding="utf-8")
         self.assertIn("SpellAudio.flight_stream(visual)", projectile)
         self.assertIn('"SpellFlightAudio"', projectile)
+
+    def test_fire_has_volume(self):
+        text = PROJECTILE.read_text(encoding="utf-8")
+        self.assertIn("func _fire_body() -> ArrayMesh:", text)
+        self.assertIn("_append_octahedron(", text)
+        self.assertIn("func _make_flames() -> GPUParticles3D:", text)
+        # Шлейф пламени остаётся в мире и всплывает медленно.
+        flames = text.split("func _make_flames()", 1)[1].split("func _make_smoke()", 1)[0]
+        self.assertIn("local_coords = false", flames)
+        self.assertIn("gravity = Vector3(0.0, 1.1, 0.0)", flames)
+        # Свет огня отбрасывает тень.
+        self.assertIn("_light.shadow_enabled = true", text)
+
+    def test_screen_post_process(self):
+        fx = (ROOT / "spell_screen_fx.gd").read_text(encoding="utf-8")
+        self.assertIn("class_name SpellScreenFx", fx)
+        self.assertIn("extends ColorRect", fx)
+        self.assertIn("shader_type canvas_item;", fx)
+        for layer in ("flash", "focus", "aberration", "vignette_base"):
+            self.assertIn("uniform float %s" % layer, fx)
+        self.assertIn("func on_cast(color: Color) -> void:", fx)
+        self.assertIn("func on_impact(color: Color, distance: float, heavy: bool) -> void:", fx)
+        hud = HUD.read_text(encoding="utf-8")
+        self.assertIn("screen_fx = SpellScreenFx.create(self)", hud)
+        self.assertIn("screen_fx.on_cast(spell_tint)", hud)
+        self.assertIn("screen_fx.on_impact(spell_tint, dist, heavy)", hud)
+
+    def test_impact_leaves_glow_on_surface(self):
+        text = PROJECTILE.read_text(encoding="utf-8")
+        self.assertIn("func _spawn_glow_pool(scene: Node, normal: Vector3) -> void:", text)
+        self.assertIn('pool.name = "SpellGlowPool"', text)
+        self.assertIn("_spawn_glow_pool(scene, n)", text)
 
     def test_projectiles_are_pooled(self):
         pool = (ROOT / "spell_pool.gd").read_text(encoding="utf-8")
