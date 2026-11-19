@@ -6,8 +6,6 @@
 [ext_resource type="Script" uid="uid://cnjr2p75ao1pj" path="res://enemy_health_overlay.gd" id="5_overlay"]
 [ext_resource type="PackedScene" path="res://Models/Wall_with_collision.tscn" id="6_7mycd"]
 [ext_resource type="PackedScene" path="res://Models/Corner_Wall_with_collision.tscn" id="9_kek77"]
-[ext_resource type="PackedScene" path="res://Models/Wall_Lining_Straight.tscn" id="15_lining_straight"]
-[ext_resource type="PackedScene" path="res://Models/Wall_Lining_Corner.tscn" id="16_lining_corner"]
 [ext_resource type="PackedScene" path="res://Models/Floor/Wood_Floor_Module_00_00.glb" id="14_floor_00_00"]
 [ext_resource type="PackedScene" path="res://Models/Floor/Wood_Floor_Module_00_01.glb" id="14_floor_00_01"]
 [ext_resource type="PackedScene" path="res://Models/Floor/Wood_Floor_Module_00_02.glb" id="14_floor_00_02"]
@@ -24,6 +22,8 @@
 [ext_resource type="PackedScene" path="res://Models/Floor/Wood_Floor_Module_03_01.glb" id="14_floor_03_01"]
 [ext_resource type="PackedScene" path="res://Models/Floor/Wood_Floor_Module_03_02.glb" id="14_floor_03_02"]
 [ext_resource type="PackedScene" path="res://Models/Floor/Wood_Floor_Module_03_03.glb" id="14_floor_03_03"]
+[ext_resource type="PackedScene" path="res://Models/Wall_Lining_Straight.tscn" id="15_lining_straight"]
+[ext_resource type="PackedScene" path="res://Models/Wall_Lining_Corner.tscn" id="16_lining_corner"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_1"]
 sky_horizon_color = Color(0.64625, 0.65575, 0.67075, 1)
@@ -89,13 +89,31 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -3, 1, -4)
 collision_layer = 4
 script = ExtResource("3_interact")
 
+[node name="MeshInstance3D" type="MeshInstance3D" parent="BoxLeft" unique_id=1040693522]
+mesh = SubResource("BoxMesh_box")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="BoxLeft" unique_id=1997848562]
+shape = SubResource("BoxShape_box")
+
 [node name="BoxRight" type="StaticBody3D" parent="." unique_id=1774281862]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 1, -4)
 collision_layer = 4
 script = ExtResource("3_interact")
 
+[node name="MeshInstance3D" type="MeshInstance3D" parent="BoxRight" unique_id=347324519]
+mesh = SubResource("BoxMesh_box")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="BoxRight" unique_id=1092668638]
+shape = SubResource("BoxShape_box")
+
 [node name="LowCeiling" type="StaticBody3D" parent="." unique_id=1548379742]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.4, -4)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="LowCeiling" unique_id=65150600]
+mesh = SubResource("BoxMesh_ceil")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="LowCeiling" unique_id=1761116681]
+shape = SubResource("BoxShape_ceil")
 
 [node name="Stair1" type="StaticBody3D" parent="." unique_id=1608271421]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.125, 4)
