@@ -1,15 +1,33 @@
 #!/usr/bin/env python3
-"""Generate a quiet, wall-matched timber floor for the first-floor ring.
+"""Generate WOOD PAVERS with real grain for the first-floor ring.
 
-    python Tools/generate_wood_floor.py            # 3 modular source GLBs
-    python Tools/generate_wood_floor.py --layout  # print the fallback layout
-    python Tools/generate_wood_floor_whole.py     # modular + continuous floor
+    python Tools/generate_wood_floor.py            # the 3 modular source GLBs
+    python Tools/generate_wood_floor.py --layout  # print the 16 fallback placements
+    python Tools/generate_wood_floor_whole.py     # those 3 + the ONE continuous floor
 
-The floor uses broad, staggered dark-smoked-oak boards, a restrained lengthwise
-grain, shallow V-joints, and a warm oak perimeter frame that echoes the wall
-posts. Geometry is clipped to the walls' rounded-square inner face. The whole
-floor stays one mesh; a continuous subfloor closes every joint above the
-checkerboard collider floor. Standard library only, byte reproducible.
+ONE continuous mesh, REAL geometry. Square wood pavers (~1.58 m) are cut to the
+wall's rounded-square inner face. The concentric "rings" of the previous version
+are gone: under a single directional light they read as printed eye/targets.
+The 0.34 m pavers of v4 were too small from player height, so v5 doubled the
+paver and v6 DOUBLED IT AGAIN (1.57905 m), always scaling the grain / V-groove
+with it. v6 also emits 16 separate module GLBs for the scene (see the whole
+generator), the single mesh remains only as a geometry reference for tests.
+
+Instead, each paver has REAL WOOD GRAIN: a handful of narrow V-grooves cut into
+the top face, running along a per-paver direction (0 or 90 degrees + jitter).
+They are real sloped geometry, lit and shadowed by the engine, not a texture and
+not a painted line. Four ALMOST IDENTICAL oak tones (+/-2 per channel) are
+applied per paver, tied to its grain direction, via separate material slots -
+no big colour patches, no 6-tone quilt. This one constraint was explicitly
+relaxed to make the floor read as wood; the grain geometry does the real work.
+
+Between pavers there is NO through gap: the flat top is inset ~20 mm from the
+block's full outline and the sidewalls slope 10 mm DOWN to that outline. Two
+neighbours share the outline vertex-for-vertex, so the two chamfers form a
+closed V-groove. A continuous solid subfloor of the same wood sits 4 mm below
+the groove bottom at local y = -0.012, i.e. world y = +0.008 with the WoodFloor
+offset: the checkerboard collider floor (top at y = 0) can never be seen through
+a groove. Standard library only, byte reproducible.
 """
 import json
 import math
@@ -26,29 +44,27 @@ INNER_R = RADIUS - 1.0          # 3.0743 - wall inner arc / floor corner radius
 H = MODULE + INNER_R            # 9.4743, half of the interior rounded square
 ARC_STEPS = 28
 
-PLANK_WIDTH = 0.60             # paired short boards form square parquet panels
-PLANK_LENGTH = 1.2
-PANEL_SIZE = 1.2
-FRAME_WIDTH = 0.28             # perimeter band in the warm wall-post oak
-INSET = 0.012                  # subtle bevel at board joints
-GROOVE = 0.0055                # shallow 5.5 mm V-joint
+GRID_N = 12                    # whole floor: 12 x 12 VERY LARGE pavers
+PITCH = 2 * H / GRID_N         # 1.57905 m (v5: 24 x 24 of 0.789525 m)
+INSET = 0.020                  # flat top inset from the full block edge
+GROOVE = 0.010                 # V-groove depth (10 mm)
 TOP_Y = 0.0                    # world 0.02 through the WoodFloor node
-GROOVE_Y = TOP_Y - GROOVE
-BASE_Y = TOP_Y - 0.0085        # subfloor remains above checkerboard collider
+GROOVE_Y = TOP_Y - GROOVE      # -0.010 -> world +0.010, full shared edge
+BASE_Y = TOP_Y - 0.012         # -0.012 -> world +0.008, ABOVE the checkered y=0
 MIN_AREA = 1e-6
 
-# Fine, shallow lengthwise grain: detail supports the boards instead of
-# competing with the wall's large stylized forms.
-GRAIN_LAND = (0.12, 0.22)
-GRAIN_WIDTH = (0.010, 0.016)
-GRAIN_DEPTH = (0.0007, 0.0014)
-GRAIN_JITTER = 0.045
+# Real grain grooves: irregular land / groove / groove, all cut as geometry.
+# Scaled WITH the paver: at 0.34 m the old 11-18 mm grooves read as a fine
+# comb on a 1.58 m paver; keep ~6-8 fibres per paver at any GRID_N.
+GRAIN_LAND = (0.160, 0.260)    # flat land between grooves, metres
+GRAIN_WIDTH = (0.036, 0.060)   # groove width, metres
+GRAIN_DEPTH = (0.0036, 0.0063) # groove depth, metres
+GRAIN_JITTER = 0.09            # max grain direction jitter, radians
 
-# Smoky brown-gray field with a little variation; warm oak is reserved for the
-# border, visually tying the floor to the timber posts around the room.
-WOOD_HEX = "#805637"
-WOOD_TONES = ("#805637", "#855B3B", "#7B5234", "#835939")
-FRAME_HEX = "#7A5230"
+WOOD_HEX = "#7A5230"           # base warm oak tone, matches wall posts
+# Four ALMOST IDENTICAL tones (+/-2 per channel). Large colour patches read as
+# a checkerboard quilt from above; the wood look comes from the grain geometry.
+WOOD_TONES = ("#7A5230", "#7C5432", "#78502E", "#7B5331")
 
 ASSETS = {
     "Wood_Floor.glb": (MODULE, MODULE, False),
@@ -74,17 +90,7 @@ MATERIALS = [{
         "roughnessFactor": 0.9,
     },
 } for i, hex_color in enumerate(WOOD_TONES)]
-MATERIALS.append({
-    "name": "Oak_Perimeter_Frame",
-    "doubleSided": True,
-    "pbrMetallicRoughness": {
-        "baseColorFactor": linear(FRAME_HEX) + [1.0],
-        "metallicFactor": 0.0,
-        "roughnessFactor": 0.92,
-    },
-})
-MAT = 0
-FRAME_MAT = 4                         # warm oak perimeter band
+MAT = 0                         # subfloor / base tone
 
 
 def seed_for(asset_id, row, seg):
@@ -94,7 +100,7 @@ def seed_for(asset_id, row, seg):
 
 
 def tone_for(seed, i, j):
-    """Subtle board tones; no conspicuous checkerboard patches."""
+    """Per-paver tone tied to grain direction: no big square colour patches."""
     h = seed_for(seed, i, j)
     return (h % 2) * 2 + (seed_for(seed + 13, i, j) % 2)
 
@@ -239,11 +245,23 @@ def block_grid(lo, hi, pitch):
 
 # ------------------------------------------------------------- mesh building
 
+# Quantise every emitted attribute to a fixed decimal grid. Without this the GLB
+# depends on the host libm: sin/cos/cross-product jitter around 1e-16 lands in
+# the float32 bytes, so the very same generator produced different files on
+# different machines and the byte-for-byte reproducibility test failed. One
+# micron is far below any visual, collision or shader tolerance.
+DECIMALS = 6
+
+
+def q(value):
+    return round(value, DECIMALS)
+
+
 def sub(a, b):
     return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
 
 
-def add_tri(tris, a, b, c, prefer=None, material=MAT):
+def add_tri(tris, a, b, c, prefer=None):
     u, v = sub(b, a), sub(c, a)
     n = (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0])
     length = math.sqrt(sum(k * k for k in n))
@@ -253,7 +271,8 @@ def add_tri(tris, a, b, c, prefer=None, material=MAT):
     if prefer is not None and sum(n[k] * prefer[k] for k in range(3)) < 0.0:
         b, c = c, b
         n = tuple(-k for k in n)
-    tris[material].append((a, b, c, n))
+    tris[MAT].append((tuple(q(k) for k in a), tuple(q(k) for k in b),
+                      tuple(q(k) for k in c), tuple(q(k) for k in n)))
 
 
 def add_top(tris, poly, y):
@@ -268,7 +287,7 @@ def add_top(tris, poly, y):
 def grain_strips(seed, vmin, vmax):
     """(v0, v1, y0, y1) strips: flat land, down-slope, up-slope."""
     out = []
-    v = vmin - 0.05
+    v = vmin - 0.20
     k = 0
     while v < vmax and k < 64:
         r1 = (seed_for(seed, k, 11) % 1000) / 1000.0
@@ -285,10 +304,10 @@ def grain_strips(seed, vmin, vmax):
     return out
 
 
-def add_grain_top(tris, poly, y, seed, direction=0.0):
-    """Fine wood grain along the board's long axis, with slight irregularity."""
+def add_grain_top(tris, poly, y, seed):
+    """Real wood fibres: irregular shallow V-grooves, one direction per paver."""
     r = (seed_for(seed, 0, 23) % 1000) / 1000.0
-    theta = direction + (r - 0.5) * 2.0 * GRAIN_JITTER
+    theta = (math.pi / 2.0 if seed % 2 else 0.0) + (r - 0.5) * 2.0 * GRAIN_JITTER
     nx, nz = -math.sin(theta), math.cos(theta)
     vs = [nx * p[0] + nz * p[1] for p in poly]
     vmin, vmax = min(vs) - 1e-6, max(vs) + 1e-6
@@ -312,8 +331,8 @@ def add_grain_top(tris, poly, y, seed, direction=0.0):
                     (0.0, 1.0, 0.0))
 
 
-def add_block(tris, poly, seed, mat=None, grain_direction=0.0):
-    """One board: restrained lengthwise grain and shallow V-chamfer."""
+def add_block(tris, poly, seed, mat=None):
+    """One paver: grained top, real V-chamfer, edge-to-edge outline."""
     if mat is None:
         mat = MAT
     poly = ccw(clean(poly))
@@ -323,7 +342,7 @@ def add_block(tris, poly, seed, mat=None, grain_direction=0.0):
     top = inset_outline(poly, INSET)
     if len(top) != len(poly):
         top = radial_shrink(poly, INSET)
-    add_grain_top(local, top, TOP_Y, seed, grain_direction)
+    add_grain_top(local, top, TOP_Y, seed)
     cx, cz = centroid(poly)
     n = len(poly)
     for i in range(n):
@@ -341,8 +360,12 @@ def add_block(tris, poly, seed, mat=None, grain_direction=0.0):
     tris.setdefault(mat, []).extend(local[MAT])
 
 
-def add_subfloor(tris, base_poly):
-    """Continuous solid wood under the V-grooves + a closed outer rim."""
+def add_subfloor(tris, base_poly, rim=None):
+    """Continuous solid wood under the V-grooves + a closed outer rim.
+
+    rim(p, q) optionally filters edges: adjacent floor MODULES must not emit two
+    coincident back-to-back rim walls on their shared internal seam.
+    """
     base = ccw(clean(base_poly))
     if len(base) < 3:
         return
@@ -351,6 +374,8 @@ def add_subfloor(tris, base_poly):
     n = len(base)
     for i in range(n):
         p, q = base[i], base[(i + 1) % n]
+        if rim is not None and not rim(p, q):
+            continue
         a = (p[0], GROOVE_Y, p[1])
         b = (q[0], GROOVE_Y, q[1])
         c = (q[0], BASE_Y, q[1])
@@ -361,55 +386,44 @@ def add_subfloor(tris, base_poly):
         add_tri(tris, a, c, d, prefer)
 
 
+def build_blocks(tris, xs, zs, hps, seed_base):
+    """Clip a full grid to the boundary and emit every surviving paver."""
+    blocks = {}
+    for i in range(len(xs) - 1):
+        for j in range(len(zs) - 1):
+            poly = clean(clip_all(rect(xs[i], zs[j], xs[i + 1], zs[j + 1]), hps))
+            if not poly or area(poly) < MIN_AREA:
+                continue
+            blocks[(i, j)] = poly
+            add_block(tris, poly, seed_for(seed_base, i, j),
+                      tone_for(seed_base, i, j))
+    return blocks
+
 
 def empty_tris():
     return {i: [] for i in range(len(MATERIALS))}
-
-
-def staggered_seams(lo, hi, target, shifted=False):
-    """Even board lengths, with alternate rows shifted by half a board."""
-    seams = block_grid(lo, hi, target)
-    if not shifted or len(seams) < 3:
-        return seams
-    offset = (seams[1] - seams[0]) * 0.5
-    return [lo] + [value + offset for value in seams[1:-1]] + [hi]
-
-
-def build_board_rows(tris, x0, x1, z0, z1, hps, seed_base):
-    """Emit broad clipped boards with half-board stagger between rows."""
-    zs = block_grid(z0, z1, PLANK_WIDTH)
-    boards = {}
-    for row in range(len(zs) - 1):
-        xs = staggered_seams(x0, x1, PLANK_LENGTH, bool(row % 2))
-        for col in range(len(xs) - 1):
-            poly = clean(clip_all(rect(xs[col], zs[row], xs[col + 1], zs[row + 1]), hps))
-            if not poly or area(poly) < MIN_AREA:
-                continue
-            boards[(row, col)] = poly
-            seed = seed_for(seed_base, row, col)
-            add_block(tris, poly, seed, tone_for(seed_base, row, col))
-    return boards, (zs[1] - zs[0] if len(zs) > 1 else 0.0)
 
 
 def build_mesh(asset_id, width, depth, corner):
     tris = empty_tris()
     if corner:
         hps = corner_halfplanes()
-        x0 = z0 = 0.0
-        x1 = z1 = INNER_R
-        base = clip_all(rect(x0, z0, x1, z1), hps)
+        base = clip_all(rect(0.0, 0.0, INNER_R, INNER_R), hps)
+        xs = block_grid(0.0, INNER_R, PITCH)
+        zs = block_grid(0.0, INNER_R, PITCH)
     else:
         hps = []
-        x0, x1, z0, z1 = 0.0, width, -depth, 0.0
-        base = rect(x0, z0, x1, z1)
+        base = rect(0.0, -depth, width, 0.0)
+        xs = block_grid(0.0, width, PITCH)
+        zs = block_grid(-depth, 0.0, PITCH)
     add_subfloor(tris, base)
-    boards, width_pitch = build_board_rows(tris, x0, x1, z0, z1, hps, asset_id + 1)
-    return tris, boards, width_pitch
+    blocks = build_blocks(tris, xs, zs, hps, asset_id + 1)
+    return tris, blocks, xs[1] - xs[0]
 
 
 def asset_meta(pitch, blocks):
     """Node extras shared by main() and the byte-reproducibility test."""
-    return {"board_width": round(pitch, 6), "board_count": len(blocks)}
+    return {"block_pitch": round(pitch, 6), "block_count": len(blocks)}
 
 
 def write_glb(path, tris, name, width, depth, corner, meta=None):
@@ -454,16 +468,15 @@ def write_glb(path, tris, name, width, depth, corner, meta=None):
         blob.append(0)
 
     extras = {"cell": [width, depth], "corner": corner,
-              "style": "warm wood parquet boards with oak perimeter frame",
-              "material_count": len(MATERIALS), "tone_count": len(WOOD_TONES),
+              "style": "wood pavers, real grain grooves",
+              "material_count": len(MATERIALS), "tone_count": len(MATERIALS),
               "painted_details": False, "grain_grooves": True,
-              "perimeter_frame": False, "frame_material": FRAME_MAT,
               "groove_depth": GROOVE, "top_inset": INSET,
               "subfloor_y": BASE_Y}
     if meta:
         extras.update(meta)
     doc = {
-        "asset": {"generator": "generate_wood_floor.py v5", "version": "2.0"},
+        "asset": {"generator": "generate_wood_floor.py v6", "version": "2.0"},
         "scene": 0,
         "scenes": [{"name": "Scene", "nodes": [0]}],
         "nodes": [{"mesh": 0, "name": name, "extras": extras}],
@@ -529,7 +542,7 @@ def main():
         tris, blocks, pitch = build_mesh(asset_id, width, depth, corner)
         size, count = write_glb(OUT_DIR / name, tris, stem, width, depth, corner,
                                 asset_meta(pitch, blocks))
-        print("%s: %s bytes, %d triangles, %d boards, %.4f m board width"
+        print("%s: %s bytes, %d triangles, %d pavers, %.4f m pitch"
               % (name, format(size, ","), count, len(blocks), pitch))
 
 

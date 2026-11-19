@@ -50,6 +50,17 @@ MODULE_LENGTH = 6.4
 # four decimals: the end-post guard below needs x_body_end < X_POST_R.
 DEFAULT_RADIUS = math.floor((2.0 * MODULE_LENGTH / math.pi) * 10000) / 10000
 
+# Quantise emitted attributes to a fixed decimal grid. Without this the GLB
+# depends on the host libm: sin/cos/cross-product jitter around 1e-16 lands in
+# the float32 bytes, so the very same generator produced different files on
+# different machines and the byte-for-byte reproducibility test failed. One
+# micron is far below any visual, collision or shader tolerance.
+DECIMALS = 6
+
+
+def q(value):
+    return round(value, DECIMALS)
+
 
 class CornerSpec:
     """Path geometry for a quarter-circle corner with un-stretched masonry."""
@@ -288,23 +299,17 @@ def build_corner_wall(spec: CornerSpec, target: Path = TARGET):
             nx, ny, nz = nx / mag, ny / mag, nz / mag
 
             tri_indices = []
+            qnx, qny, qnz = q(nx), q(ny), q(nz)
             for v in (a, b, c):
-                key = (
-                    round(v[0], 6),
-                    round(v[1], 6),
-                    round(v[2], 6),
-                    round(nx, 5),
-                    round(ny, 5),
-                    round(nz, 5),
-                    round(v[3], 5),
-                    round(v[4], 5),
-                )
+                px, py, pz = q(v[0]), q(v[1]), q(v[2])
+                key = (px, py, pz, round(nx, 5), round(ny, 5), round(nz, 5),
+                       round(v[3], 5), round(v[4], 5))
                 v_idx = vert_map.get(key)
                 if v_idx is None:
                     v_idx = len(pos_list)
                     vert_map[key] = v_idx
-                    pos_list.append((v[0], v[1], v[2]))
-                    nrm_list.append((nx, ny, nz))
+                    pos_list.append((px, py, pz))
+                    nrm_list.append((qnx, qny, qnz))
                     uv_list.append((v[3], v[4]))
                 tri_indices.append(v_idx)
             idx_list.extend(tri_indices)

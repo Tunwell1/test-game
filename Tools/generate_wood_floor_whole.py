@@ -1,41 +1,38 @@
 #!/usr/bin/env python3
-"""Generate seven mirrored, controlled-chaos wood floor candidates.
+"""Build the first-floor wooden floor as 16 SEPARATE modules (+ a reference mesh).
 
-    python Tools/generate_wood_floor_whole.py            # regenerate all floors
-    python Tools/generate_wood_floor_whole.py --layout  # print main placement
+    python Tools/generate_wood_floor_whole.py            # regenerate ALL GLBs
+    python Tools/generate_wood_floor_whole.py --layout  # print the placements
 
-Each candidate is a warm wooden patchwork: irregular rectangular boards are
-randomly subdivided inside one quadrant, then mirrored into the other three.
-This keeps the room perfectly balanced while the varied board sizes and grain
-axes add a little organic chaos. All variants share a warm-oak perimeter band
-and a continuous subfloor above the collision floor. Standard library only.
+The SCENE uses 16 separate instances, like the 12 wall modules: a 4 x 4 grid of
+~4.74 x 4.74 m modules, each holding 3 x 3 very large (1.57905 m) square wood
+pavers. Module borders sit exactly ON paver grid lines, so no paver is ever cut
+by a module boundary, and there are NO rotations -> no visible frame. The same
+global paver grid / seed / boundary is used for every module, so grain and
+V-grooves continue seamlessly across module seams.
+
+`Wood_Floor_Whole.glb` is still generated as ONE continuous reference mesh for
+the geometry tests (bounds, coverage, no through holes), but it is NOT used in
+main.tscn any more. The three small modular assets remain reusable source pieces.
+
+REAL geometry: real grain V-grooves, real 10 mm V-chamfers between pavers, one
+continuous wood subfloor above the checkerboard collider floor. Standard library
+only, byte reproducible.
 """
 import math
-import random
 import sys
 
 import generate_wood_floor as g
 
 WHOLE_NAME = "Wood_Floor_Whole.glb"
-VARIANT_NAMES = [WHOLE_NAME] + ["Wood_Floor_Variant_%02d.glb" % i for i in range(2, 8)]
-H = g.MODULE + g.INNER_R
-
-# Each seed gives a different mirrored cut pattern. The size cap and split
-# chance alter the visual rhythm, not the symmetry or material palette.
-VARIANT_SPECS = (
-    (41, 2.45, 0.16),
-    (83, 2.05, 0.24),
-    (127, 2.70, 0.28),
-    (191, 1.90, 0.13),
-    (239, 2.35, 0.34),
-    (307, 2.10, 0.30),
-    (383, 2.60, 0.20),
-)
-MIN_TILE = 0.62
+H = g.H                          # 9.4743, half of the interior rounded square
+MODULE_N = 4                    # 4 x 4 = 16 separate scene objects
+CELLS_PER_MODULE = g.GRID_N // MODULE_N   # 3 x 3 pavers per module
+_BLOCKS = None
 
 
 def rounded_square_halfplanes():
-    """Tangent half-planes of the rounded-square interior wall boundary."""
+    """Tangent half-planes of the four r-circles = the convex interior boundary."""
     hp = []
     corners = ((6.4, 6.4, 0.0), (6.4, -6.4, -math.pi / 2),
                (-6.4, -6.4, math.pi), (-6.4, 6.4, math.pi / 2))
@@ -47,159 +44,111 @@ def rounded_square_halfplanes():
     return hp
 
 
-def polygon_halfplanes(poly):
-    """Return a*x+b*z<=c half-planes for a CCW convex polygon."""
-    p = g.ccw(poly)
-    hp = []
-    for i, (x0, z0) in enumerate(p):
-        x1, z1 = p[(i + 1) % len(p)]
-        dx, dz = x1 - x0, z1 - z0
-        length = math.hypot(dx, dz)
-        if length < 1e-9:
-            continue
-        a, b = dz / length, -dx / length
-        hp.append((a, b, a * x0 + b * z0))
-    return hp
+def whole_grid():
+    """13 seam values -> 12 equal cells, symmetric about the world origin."""
+    return g.block_grid(-H, H, g.PITCH)
 
 
-def outer_boundary():
-    return g.ccw(g.clip_all(g.rect(-H, -H, H, H), rounded_square_halfplanes()))
-
-
-def inner_boundary():
-    return g.inset_outline(outer_boundary(), g.FRAME_WIDTH)
-
-
-def quadrant_tiles(seed, max_size, split_chance):
-    """Deterministic guillotine mosaic in +X/+Z; mirrored at build time."""
-    rng = random.Random(seed)
-    pending = [(0.0, H, 0.0, H, 0)]
-    tiles = []
-    while pending:
-        x0, x1, z0, z1, depth = pending.pop()
-        width, height = x1 - x0, z1 - z0
-        can_x = width >= MIN_TILE * 2.0
-        can_z = height >= MIN_TILE * 2.0
-        too_large = max(width, height) > max_size
-        if depth < 12 and (too_large or (rng.random() < split_chance and (can_x or can_z))):
-            if can_x and can_z:
-                if width > max_size and height <= max_size:
-                    axis = 0
-                elif height > max_size and width <= max_size:
-                    axis = 1
-                elif abs(width - height) > 0.5:
-                    axis = 0 if width > height else 1
-                else:
-                    axis = rng.randrange(2)
-            elif can_x:
-                axis = 0
-            elif can_z:
-                axis = 1
-            else:
-                axis = -1
-            if axis == 0:
-                low, high = x0 + MIN_TILE, x1 - MIN_TILE
-                if low < high:
-                    cut = low + (high - low) * rng.uniform(0.32, 0.68)
-                    pending.extend(((x0, cut, z0, z1, depth + 1),
-                                    (cut, x1, z0, z1, depth + 1)))
-                    continue
-            elif axis == 1:
-                low, high = z0 + MIN_TILE, z1 - MIN_TILE
-                if low < high:
-                    cut = low + (high - low) * rng.uniform(0.32, 0.68)
-                    pending.extend(((x0, x1, z0, cut, depth + 1),
-                                    (x0, x1, cut, z1, depth + 1)))
-                    continue
-        tiles.append((x0, x1, z0, z1))
-    return tiles
-
-
-def mirrored_tiles(variant):
-    """Yield a four-way symmetric tiling, including tile ids and signs."""
-    seed, max_size, split_chance = VARIANT_SPECS[variant]
-    for tile_id, (x0, x1, z0, z1) in enumerate(quadrant_tiles(seed, max_size, split_chance)):
-        # A tile's grain follows its longer axis, with occasional cross-grain
-        # pieces for an intentionally hand-laid, non-uniform parquet character.
-        rng = random.Random(seed * 101 + tile_id * 17)
-        along_x = (x1 - x0) >= (z1 - z0)
-        if rng.random() < 0.22:
-            along_x = not along_x
-        direction = 0.0 if along_x else math.pi / 2.0
-        material = g.tone_for(seed, tile_id, 7)
-        for sx, sz in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
-            xa, xb = (x0, x1) if sx > 0 else (-x1, -x0)
-            za, zb = (z0, z1) if sz > 0 else (-z1, -z0)
-            yield (tile_id, sx, sz), (xa, xb, za, zb), direction, material, seed
-
-
-def whole_blocks(variant=0):
-    """{(tile_id, x-sign, z-sign): clipped board footprint}."""
-    hps = polygon_halfplanes(inner_boundary())
+def whole_blocks():
+    """{(column, row): clipped footprint polygon}; cached, no GLB needed."""
+    global _BLOCKS
+    if _BLOCKS is not None:
+        return _BLOCKS
+    xs = whole_grid()
+    hps = rounded_square_halfplanes()
     blocks = {}
-    for key, (x0, x1, z0, z1), _direction, _material, _seed in mirrored_tiles(variant):
-        poly = g.clean(g.clip_all(g.rect(x0, z0, x1, z1), hps))
-        if poly and g.area(poly) >= g.MIN_AREA:
-            blocks[key] = poly
+    for i in range(len(xs) - 1):
+        for j in range(len(xs) - 1):
+            poly = g.clean(g.clip_all(g.rect(xs[i], xs[j], xs[i + 1], xs[j + 1]), hps))
+            if poly and g.area(poly) >= g.MIN_AREA:
+                blocks[(i, j)] = poly
+    _BLOCKS = blocks
     return blocks
 
 
-def add_perimeter_frame(tris, outer, inner):
-    """Warm-oak continuous frame ring; shares its inner boundary with boards."""
-    if len(outer) != len(inner):
-        raise ValueError("perimeter frame outlines must have matching vertices")
-    ring = {g.MAT: []}
-    outer, inner = g.ccw(outer), g.ccw(inner)
-    for i in range(len(outer)):
-        j = (i + 1) % len(outer)
-        a = (outer[i][0], g.TOP_Y, outer[i][1])
-        b = (outer[j][0], g.TOP_Y, outer[j][1])
-        c = (inner[j][0], g.TOP_Y, inner[j][1])
-        d = (inner[i][0], g.TOP_Y, inner[i][1])
-        g.add_tri(ring, a, b, c, (0.0, 1.0, 0.0))
-        g.add_tri(ring, a, c, d, (0.0, 1.0, 0.0))
-    tris[g.FRAME_MAT].extend(ring[g.MAT])
+def module_seams():
+    """5 module borders, each exactly on a paver grid line."""
+    seams = whole_grid()
+    return [seams[k * CELLS_PER_MODULE] for k in range(MODULE_N + 1)]
 
 
-def build_whole_floor(variant=0):
-    outer = outer_boundary()
-    inner = g.inset_outline(outer, g.FRAME_WIDTH)
-    hps = polygon_halfplanes(inner)
+def module_layout():
+    """16 dicts: the separate GLB assets and their scene placements."""
+    ms = module_seams()
+    out = []
+    for row in range(MODULE_N):
+        for col in range(MODULE_N):
+            tag = "%02d_%02d" % (row, col)
+            out.append({
+                "name": "Wood_Floor_Module_%s.glb" % tag,
+                "stem": "Wood_Floor_Module_%s" % tag,
+                "node": "floor_module_%s" % tag,
+                "rid": "14_floor_%s" % tag,
+                "row": row, "col": col,
+                "x0": ms[col], "x1": ms[col + 1],
+                "z0": ms[row], "z1": ms[row + 1],
+            })
+    return out
+
+
+def build_module(m):
+    """One module in LOCAL coordinates (its scene transform carries the origin)."""
+    x0, z0 = m["x0"], m["z0"]
+    hps = rounded_square_halfplanes()
+    base = g.clip_all(g.rect(m["x0"], m["z0"], m["x1"], m["z1"]), hps)
+    internal = module_seams()[1:-1]
+
+    def keep_rim(p, q):
+        """Skip shared internal seams: no coincident double rim walls."""
+        gp = (p[0] + x0, p[1] + z0)
+        gq = (q[0] + x0, q[1] + z0)
+        for v in internal:
+            if abs(gp[0] - v) < 1e-6 and abs(gq[0] - v) < 1e-6:
+                return False
+            if abs(gp[1] - v) < 1e-6 and abs(gq[1] - v) < 1e-6:
+                return False
+        return True
+
     tris = g.empty_tris()
-    g.add_subfloor(tris, outer)
-    add_perimeter_frame(tris, outer, inner)
-    blocks = {}
-    for key, (x0, x1, z0, z1), direction, material, seed in mirrored_tiles(variant):
-        poly = g.clean(g.clip_all(g.rect(x0, z0, x1, z1), hps))
-        if not poly or g.area(poly) < g.MIN_AREA:
+    g.add_subfloor(tris, [(x - x0, z - z0) for x, z in base], keep_rim)
+    own = {}
+    for (i, j), poly in whole_blocks().items():
+        if i // CELLS_PER_MODULE != m["col"] or j // CELLS_PER_MODULE != m["row"]:
             continue
-        blocks[key] = poly
-        tile_id, _sx, _sz = key
-        # Reflected copies share the same grain seed as well as the same tone.
-        board_seed = g.seed_for(seed + variant * 997, tile_id, 0)
-        g.add_block(tris, poly, board_seed, material, direction)
+        local = [(x - x0, z - z0) for x, z in poly]
+        own[(i, j)] = local
+        g.add_block(tris, local, g.seed_for(99, i, j), g.tone_for(99, i, j))
+    return tris, own
+
+
+def module_meta(m, blocks):
+    """Node extras shared by main() and the byte-reproducibility test."""
+    meta = g.asset_meta(g.PITCH, blocks)
+    meta.update({"module": [m["row"], m["col"]], "modules": [MODULE_N, MODULE_N],
+                 "cells_per_module": CELLS_PER_MODULE,
+                 "origin": [m["x0"], m["z0"]], "continuous": False})
+    return meta
+
+
+def build_whole_floor():
+    """The ONE continuous reference mesh (geometry truth for the tests)."""
+    hps = rounded_square_halfplanes()
+    tris = g.empty_tris()
+    g.add_subfloor(tris, g.clip_all(g.rect(-H, -H, H, H), hps))
+    blocks = whole_blocks()
+    for (i, j), poly in blocks.items():
+        g.add_block(tris, poly, g.seed_for(99, i, j), g.tone_for(99, i, j))
     return tris, blocks
 
 
-def whole_meta(blocks, variant=0):
-    seed, max_size, split_chance = VARIANT_SPECS[variant]
-    return {
-        "variant": variant + 1,
-        "variant_seed": seed,
-        "tile_count": len(blocks),
-        "max_tile_size": max_size,
-        "split_chance": split_chance,
-        "frame_width": round(g.FRAME_WIDTH, 6),
-        "symmetry": "four-way mirrored",
-        "controlled_chaos": True,
-        "perimeter_frame": True,
-        "frame_material": g.FRAME_MAT,
-        "continuous": True,
-        "style": "mirrored warm-oak patchwork",
-    }
+def whole_meta(blocks):
+    meta = g.asset_meta(g.PITCH, blocks)
+    meta.update({"grid": [g.GRID_N, g.GRID_N], "continuous": True})
+    return meta
 
 
 def whole_layout():
+    """Reference-only: the continuous mesh is no longer used in main.tscn."""
     return [("floor_whole", WHOLE_NAME, 0, 0.0, 0.0)]
 
 
@@ -207,14 +156,25 @@ def main():
     if "--layout" in sys.argv:
         for name, asset, rot, x, z in whole_layout():
             print("%-24s %-24s rot=%3d  x=%9.4f z=%9.4f" % (name, asset, rot, x, z))
+        for m in module_layout():
+            print("%-24s %-40s x=%9.4f z=%9.4f"
+                  % (m["node"], m["name"], m["x0"], m["z0"]))
         return
     g.main()
-    for variant, name in enumerate(VARIANT_NAMES):
-        tris, blocks = build_whole_floor(variant)
-        size, count = g.write_glb(g.OUT_DIR / name, tris, name[:-4],
-                                  2 * H, 2 * H, False, whole_meta(blocks, variant))
-        print("%s: %s bytes, %d triangles, %d mirrored pieces"
-              % (name, format(size, ","), count, len(blocks)))
+    for m in module_layout():
+        tris, blocks = build_module(m)
+        size, count = g.write_glb(
+            g.OUT_DIR / m["name"], tris, m["stem"],
+            m["x1"] - m["x0"], m["z1"] - m["z0"], False,
+            module_meta(m, blocks))
+        print("%s: %s bytes, %d triangles, %d pavers, origin (%.5f, %.5f)"
+              % (m["name"], format(size, ","), count, len(blocks), m["x0"], m["z0"]))
+    tris, blocks = build_whole_floor()
+    meta = whole_meta(blocks)
+    size, count = g.write_glb(g.OUT_DIR / WHOLE_NAME, tris, "Wood_Floor_Whole",
+                              2 * H, 2 * H, False, meta)
+    print("%s: %s bytes, %d triangles, %d blocks, %.4f x %.4f m, REFERENCE ONLY"
+          % (WHOLE_NAME, format(size, ","), count, len(blocks), 2 * H, 2 * H))
 
 
 if __name__ == "__main__":
