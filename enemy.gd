@@ -55,6 +55,12 @@ var burn_timer: float = 0.0
 var knock: Vector3 = Vector3.ZERO
 var _mat: StandardMaterial3D
 var _indicator: Label3D
+## Визуал горения: пока burn_timer > 0, тело пульсирует эмиссией, над ним
+## поднимается пламя, а вокруг стоит тёплый свет — огонь видно, а не только
+## «-6 HP/с» в полосе.
+var _burn_particles: GPUParticles3D = null
+var _burn_light: OmniLight3D = null
+var _burn_phase: float = 0.0
 var _seen_player_strength: float = 0.0
 var _heard_player: bool = false
 
@@ -272,6 +278,10 @@ func take_damage(amount: float) -> void:
 	if state != State.CHASE:
 		_set_state(State.CHASE)
 	_flash()
+	# Искры на теле для любого прямого удара; тик горения сюда не попадает
+	# (урон за тик < 1), поэтому искры не сыпятся каждую секунду.
+	if amount >= 5.0:
+		_spawn_hit_sparks(Color(1.0, 0.95, 0.85), 10)
 	if health <= 0.0:
 		_die()
 
@@ -282,26 +292,154 @@ func on_spell_effect(effect: String) -> void:
 	match effect:
 		"ignite":
 			burn_timer = 3.0
+			_spawn_burn_vfx()
 		"extinguish":
 			burn_timer = 0.0
+			_stop_burn_vfx()
+		"push":
+			# Ветер сбивает огонь, но оставляет холодный след на теле.
+			_spawn_hit_sparks(Color(0.85, 0.96, 1.0))
 
 func _tick_burn(delta: float) -> void:
 	if burn_timer > 0.0:
 		burn_timer -= delta
 		take_damage(6.0 * delta)
+		_tick_burn_vfx(delta)
+		if burn_timer <= 0.0:
+			_stop_burn_vfx()
 
-func _flash() -> void:
+## Пламя над горящим врагом. Частицы аддитивные (HDR) — попадают в тот же
+## узкий glow, что и снаряды, поэтому огонь светится, а не «наклеен».
+func _spawn_burn_vfx() -> void:
+	if _burn_particles != null:
+		_burn_particles.emitting = true
+		return
+	var particles := GPUParticles3D.new()
+	particles.name = "BurnVfx"
+	particles.amount = 26
+	particles.lifetime = 0.7
+	particles.local_coords = false
+	particles.visibility_aabb = AABB(Vector3(-1.5, -0.5, -1.5), Vector3(3.0, 3.5, 3.0))
+	particles.position.y = 0.6
+
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.20, 0.20)
+	# Искры пламени — тот же аддитивный HDR-материал, что у огненного снаряда.
+	quad.material = SpellProjectile.particle_material("spark", Color(1.0, 0.5, 0.12, 0.95))
+	particles.draw_pass_1 = quad
+
+	var process := ParticleProcessMaterial.new()
+	process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	process.emission_box_extents = Vector3(0.28, 0.55, 0.28)
+	process.direction = Vector3(0.0, 1.0, 0.0)
+	process.spread = 22.0
+	process.initial_velocity_min = 0.3
+	process.initial_velocity_max = 1.0
+	process.gravity = Vector3(0.0, 1.4, 0.0)
+	process.scale_min = 0.5
+	process.scale_max = 1.2
+	process.color_ramp = SpellProjectile._fade_ramp(0.7)
+	process.scale_curve = SpellProjectile._scale_curve(1.0, 0.15)
+	process.turbulence_enabled = true
+	process.turbulence_noise_strength = 0.5
+	process.turbulence_noise_scale = 1.0
+	process.turbulence_noise_speed = Vector3(1.2, 1.2, 1.2)
+	particles.process_material = process
+	particles.emitting = true
+	add_child(particles)
+	_burn_particles = particles
+
+	var light := OmniLight3D.new()
+	light.light_color = Color(1.0, 0.55, 0.2)
+	light.light_energy = 2.4
+	light.omni_range = 3.6
+	light.omni_attenuation = 1.5
+	light.position.y = 1.0
+	add_child(light)
+	_burn_light = light
+
+func _tick_burn_vfx(delta: float) -> void:
+	# Пульсация на двух частотах: пламя дышит, а не мигает лампочкой.
+	_burn_phase += delta
+	if _burn_light != null:
+		_burn_light.light_energy = 2.0 + 0.5 * sin(_burn_phase * 17.0) \
+			+ 0.3 * sin(_burn_phase * 29.0)
+	if _mat != null:
+		_mat.emission_enabled = true
+		_mat.emission = Color(1.0, 0.42, 0.1)
+		_mat.emission_energy_multiplier = 0.5 + 0.35 * sin(_burn_phase * 13.0)
+
+func _stop_burn_vfx() -> void:
+	if _burn_particles != null:
+		var particles := _burn_particles
+		particles.emitting = false
+		# Гаснет не мгновенно: догорающие искры уходят за время жизни частиц.
+		# Проверка на валидность: враг может исчезнуть раньше таймера.
+		get_tree().create_timer(1.0).timeout.connect(func() -> void:
+			if is_instance_valid(particles):
+				particles.queue_free())
+		_burn_particles = null
+	if _burn_light != null:
+		var light := _burn_light
+		var tw := create_tween()
+		tw.tween_property(light, "light_energy", 0.0, 0.6)
+		tw.tween_callback(light.queue_free)
+		_burn_light = null
+	if _mat != null and state != State.DEAD:
+		_mat.emission_enabled = false
+
+## Вспышка по телу: короткий белый удар с обратным спадом к базовому албедо.
+## Цвет школы виден даже на 1–2 кадрах — это то, что «продаёт» попадание.
+func _flash(hit_color: Color = Color(1, 1, 1)) -> void:
 	if _mat == null:
 		return
-	_mat.albedo_color = Color(1, 1, 1)
+	_mat.albedo_color = hit_color
 	var tw := create_tween()
-	tw.tween_property(_mat, "albedo_color", Color(0.6, 0.2, 0.2), 0.15)
+	tw.tween_property(_mat, "albedo_color", Color(0.6, 0.2, 0.2), 0.18)
+
+## Аддитивные искры в точке попадания на самом теле врага.
+func _spawn_hit_sparks(color: Color, count: int = 14) -> void:
+	var particles := GPUParticles3D.new()
+	particles.name = "HitSparks"
+	particles.amount = count
+	particles.lifetime = 0.4
+	particles.one_shot = true
+	particles.explosiveness = 1.0
+	particles.local_coords = false
+	particles.position.y = 1.1
+	particles.visibility_aabb = AABB(Vector3(-1.5, -1.5, -1.5), Vector3(3.0, 3.0, 3.0))
+
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.16, 0.16)
+	# Осколки «материи» при попадании не светятся: тёплые искры — только у огня.
+	quad.material = SpellProjectile.particle_material("shard", color)
+	particles.draw_pass_1 = quad
+
+	var process := ParticleProcessMaterial.new()
+	process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	process.emission_sphere_radius = 0.25
+	process.direction = Vector3(0.0, 1.0, 0.0)
+	process.spread = 80.0
+	process.initial_velocity_min = 0.8
+	process.initial_velocity_max = 2.2
+	process.gravity = Vector3(0.0, -3.0, 0.0)
+	process.scale_min = 0.5
+	process.scale_max = 1.1
+	process.color_ramp = SpellProjectile._fade_ramp(0.6)
+	process.scale_curve = SpellProjectile._scale_curve(1.0, 0.1)
+	particles.process_material = process
+	particles.emitting = true
+	add_child(particles)
+	get_tree().create_timer(0.6).timeout.connect(particles.queue_free)
 
 func _die() -> void:
 	state = State.DEAD
 	died.emit()
 	_indicator.text = ""
 	collision_layer = 0
+	# Догорающее пламя не должно висеть над трупом: гасим вместе со смертью.
+	burn_timer = 0.0
+	_stop_burn_vfx()
 	var tw := create_tween()
 	tw.tween_property(self, "rotation:x", deg_to_rad(-90), 0.4)
 	tw.tween_interval(3.0)

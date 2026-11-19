@@ -9,8 +9,15 @@ signal selected_changed(spell_id: String)
 
 const M := MagicBook.School
 
-## Антиципация перед вылетом снаряда: короткий «сбор» энергии и отдача камеры.
-const CAST_WINDUP := 0.12
+## Антиципация перед вылетом снаряда: «сбор» энергии и отдача камеры.
+## 0.12 с — это 7 кадров, глаз не успевал прочитать замах; 0.2 с читается
+## как намерение, но всё ещё не мешает стрелять.
+const CAST_WINDUP := 0.2
+
+## Точка «руки» относительно камеры, в метрах: вправо, вниз и вперёд.
+## Эффект сбора и вылет снаряда используют её же — тогда цепочка
+## «энергия собралась → снаряд вылетел» читается как одно движение.
+const CAST_HAND_OFFSET := Vector3(0.32, -0.26, -0.75)
 
 ## Заклинания. noise — шум для стелса (магия безмолвна, поэтому по умолчанию почти 0).
 const SPELLS: Dictionary = {
@@ -137,13 +144,20 @@ func cast(id: String) -> bool:
 	magic_noise = maxf(magic_noise, data["noise"])
 
 	var cam := player.camera
-	_spawn_cast_fx(cam, data["color"])
+	_spawn_cast_fx(cam, data["color"], str(data.get("visual", "fire")))
 	SpellAudio.play_at(player, Vector3.ZERO,
 		SpellAudio.cast_stream(str(data.get("visual", ""))), -8.0, "CastAudio")
-	player.apply_cast_recoil(2.5, 0.03)
+	player.apply_cast_recoil(5.0, 0.04)
 	# Снаряд вылетает после короткой антиципации, а не мгновенно.
 	get_tree().create_timer(CAST_WINDUP).timeout.connect(_launch.bind(id))
 	return true
+
+## Мировая точка «руки»: смещение применяется в базисе камеры, чтобы эффект
+## всегда был справа-снизу от прицела, как бы игрок ни повернулся.
+func cast_hand_position(cam: Camera3D) -> Vector3:
+	if cam == null:
+		return Vector3.ZERO
+	return cam.global_position + cam.global_transform.basis * CAST_HAND_OFFSET
 
 ## Вылет снаряда после антиципации. Направление пересчитывается в момент
 ## вылета: игрок мог повернуть камеру за доли секунды «сбора».
@@ -156,25 +170,33 @@ func _launch(id: String) -> void:
 	var cam := player.camera
 	if cam == null:
 		return
-	var proj := SpellProjectile.new()
+	# Снаряд берётся из пула: меши, материалы и GPU-частицы уже собраны.
+	# В момент каста остаются только позиция и запуск.
+	var pool := SpellPool.get_or_create(player.get_tree())
+	if pool.get_parent() == null:
+		var host: Node = player.get_tree().current_scene
+		if host == null:
+			host = player.get_parent()
+		host.add_child(pool)
+	var proj := pool.acquire(str(data.get("visual", "")))
+	if proj == null:
+		return
 	proj.caster = player
 	proj.direction = -cam.global_transform.basis.z
 	proj.speed = data["speed"] * speed_multiplier
 	proj.damage = data["damage"]
 	proj.knockback = data["knockback"]
 	proj.effect = data["effect"]
-	proj.visual = str(data.get("visual", ""))
-	proj.tint = data["color"]
-	proj.configure()
-	var parent: Node = player.get_tree().current_scene
-	if parent == null:
-		parent = player.get_parent()
-	parent.add_child(proj)
-	proj.global_position = cam.global_position + proj.direction * 0.8
+	proj.lifetime = 4.0
+	# apply_tint сам пересоберёт тело, если снаряд из пула был другой школы.
+	proj.apply_tint(data["color"], str(data.get("visual", "")))
+	# Снаряд стартует из точки сбора у «руки», а не из центра объектива.
+	proj.global_position = cast_hand_position(cam)
+	proj.launch()
 	spell_cast.emit(id)
 
 ## «Сбор» энергии у камеры: искры сжимаются и гаснут, вспышка света.
-func _spawn_cast_fx(cam: Camera3D, tint: Color) -> void:
+func _spawn_cast_fx(cam: Camera3D, tint: Color, visual_kind: String) -> void:
 	if cam == null:
 		return
 	var parent: Node = get_tree().current_scene
@@ -185,32 +207,41 @@ func _spawn_cast_fx(cam: Camera3D, tint: Color) -> void:
 	var fx := Node3D.new()
 	fx.name = "CastGather"
 	parent.add_child(fx)
-	fx.global_position = cam.global_position - cam.global_transform.basis.z * 0.7
+	fx.global_position = cast_hand_position(cam)
 
-	var light := OmniLight3D.new()
-	light.light_color = tint
-	light.light_energy = 1.6
-	light.omni_range = 2.5
-	fx.add_child(light)
+	# Сбор энергии выглядит по-разному. Светится только огонь: камень
+	# стягивается в руку пылью, вода — каплями, ветер — полосами воздуха.
+	var burns := visual_kind == "fire"
+	var kind := "spark"
+	match visual_kind:
+		"earth":
+			kind = "soft"
+		"water":
+			kind = "droplet"
+		"wind":
+			kind = "streak"
+
+	var light: OmniLight3D = null
+	if burns:
+		light = OmniLight3D.new()
+		light.light_color = tint
+		light.light_energy = 3.2
+		light.omni_range = 3.2
+		light.omni_attenuation = 1.4
+		fx.add_child(light)
 
 	var particles := GPUParticles3D.new()
-	particles.amount = 14
+	particles.amount = 22
 	particles.lifetime = CAST_WINDUP + 0.05
 	particles.one_shot = true
 	particles.local_coords = false
 	particles.visibility_aabb = AABB(Vector3(-1.0, -1.0, -1.0), Vector3(2.0, 2.0, 2.0))
 	var quad := QuadMesh.new()
-	quad.size = Vector2(0.12, 0.12)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_texture = SpellProjectile._particle_texture("shard")
-	mat.albedo_color = Color(tint.r, tint.g, tint.b, 0.9)
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.alpha_scissor_threshold = 0.5
-	mat.vertex_color_use_as_albedo = true
-	quad.material = mat
+	quad.size = Vector2(0.14, 0.14)
+	# Общий генератор материалов: аддитивный HDR — только для искр огня,
+	# остальные школы получают освещённую материю.
+	quad.material = SpellProjectile.particle_material(kind,
+		Color(tint.r, tint.g, tint.b, 0.9))
 	particles.draw_pass_1 = quad
 	var process := ParticleProcessMaterial.new()
 	process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
@@ -224,11 +255,17 @@ func _spawn_cast_fx(cam: Camera3D, tint: Color) -> void:
 	process.scale_max = 1.2
 	process.color_ramp = SpellProjectile._fade_ramp(0.85)
 	# Частицы сжимаются в точку — читается как «втягивание» энергии.
-	process.scale_curve = SpellProjectile._scale_curve(1.0, 0.1)
+	process.scale_curve = SpellProjectile._scale_curve(1.7, 0.05)
+	if kind == "droplet":
+		# Капли стягиваются к руке и гаснут, но падают, а не висят.
+		process.gravity = Vector3(0.0, -1.5, 0.0)
 	particles.process_material = process
 	particles.emitting = true
 	fx.add_child(particles)
 
-	var tween := fx.create_tween()
-	tween.tween_property(light, "light_energy", 0.0, CAST_WINDUP + 0.08)
+	if light != null:
+		var tween := fx.create_tween()
+		# Свет не просто гаснет: подъём к моменту вылета и резкий спад.
+		tween.tween_property(light, "light_energy", 4.2, CAST_WINDUP * 0.7)
+		tween.tween_property(light, "light_energy", 0.0, CAST_WINDUP * 0.9)
 	get_tree().create_timer(0.5).timeout.connect(fx.queue_free)

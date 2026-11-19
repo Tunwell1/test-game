@@ -18,12 +18,32 @@ class DebugModeTests(unittest.TestCase):
         self.assertIn("var speed_multiplier: float = 1.0", text)
         self.assertIn("proj.speed = data[\"speed\"] * speed_multiplier", text)
 
-    def test_hud_defines_debug_steps(self):
+    def test_hud_defines_free_ranges_and_defaults(self):
+        """Ограничений-списков нет: значения свободные, шаг фиксированный."""
         text = HUD.read_text(encoding="utf-8")
-        self.assertIn("const TIME_SCALES := [1.0, 0.5, 0.25, 0.1]", text)
-        self.assertIn("const MAGIC_SPEEDS := [0.25, 0.5, 0.75, 1.0, 1.5, 2.0]", text)
-        self.assertIn("var _time_scale_index := 1", text)
-        self.assertIn("var _magic_speed_index := 3", text)
+        self.assertIn("const TIME_STEP := 0.05", text)
+        self.assertIn("const MAGIC_STEP := 0.05", text)
+        self.assertIn("const TIME_MIN := 0.01", text)
+        # По умолчанию в F3: время 1, магия 0.1.
+        self.assertIn("const TIME_DEFAULT := 1.0", text)
+        self.assertIn("const MAGIC_DEFAULT := 0.1", text)
+        self.assertIn("var _time_scale := TIME_DEFAULT", text)
+        self.assertIn("var _magic_speed := MAGIC_DEFAULT", text)
+        # Старые жёсткие индексы в списках больше не управляют значениями.
+        self.assertNotIn("var _time_scale_index", text)
+        self.assertNotIn("var _magic_speed_index", text)
+        self.assertNotIn("clampi(_time_scale_index", text)
+
+    def test_debug_values_are_clamped_not_listed(self):
+        text = HUD.read_text(encoding="utf-8")
+        self.assertIn("_time_scale = clampf(_time_scale, TIME_MIN, 16.0)", text)
+        self.assertIn("_magic_speed = clampf(_magic_speed, MAGIC_MIN, 16.0)", text)
+        # Shift даёт ступени из списка, без Shift — мелкий шаг.
+        self.assertIn("var coarse := key.shift_pressed", text)
+        self.assertIn("_step(_time_scale, TIME_STEP, TIME_SCALES, coarse, false)", text)
+        self.assertIn("_step(_magic_speed, MAGIC_STEP, MAGIC_SPEEDS, coarse, true)", text)
+        # Ступени не потолок: если дальше ступени нет, шагаем по step.
+        self.assertIn("if is_equal_approx(snapped, from):", text)
 
     def test_hud_handles_debug_hotkeys(self):
         text = HUD.read_text(encoding="utf-8")
@@ -32,8 +52,8 @@ class DebugModeTests(unittest.TestCase):
                     "KEY_BRACKETLEFT", "KEY_BRACKETRIGHT"):
             self.assertIn(key, text)
         self.assertIn("func _apply_debug_settings() -> void:", text)
-        self.assertIn("Engine.time_scale = TIME_SCALES[_time_scale_index]", text)
-        self.assertIn("player.spell_caster.speed_multiplier = MAGIC_SPEEDS", text)
+        self.assertIn("Engine.time_scale = maxf(_time_scale, TIME_MIN)", text)
+        self.assertIn("player.spell_caster.speed_multiplier = _magic_speed", text)
         self.assertIn("Engine.time_scale = 1.0", text)
 
     def test_hud_draws_debug_readout(self):

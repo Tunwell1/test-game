@@ -8,13 +8,27 @@ extends CanvasLayer
 
 const MARGIN := 44.0
 const BAR_WIDTH := 260.0
-## Режим подробного просмотра: F3 включает, −/= меняет время, [/] — скорость магии.
+## Режим подробного просмотра: F3 включает, −/= меняет время, [/] — скорость
+## магии. Ограничений-списков больше нет: шаг фиксированный, значения любые в
+## пределах движка. Списки оставлены только как ступени для Shift.
 const TIME_SCALES := [1.0, 0.5, 0.25, 0.1]
-const MAGIC_SPEEDS := [0.25, 0.5, 0.75, 1.0, 1.5, 2.0]
+const MAGIC_SPEEDS := [0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0]
+## Шаг −/= и [/] без Shift. Мелкий шаг нужен, чтобы ловить медленные скорости.
+const TIME_STEP := 0.05
+const MAGIC_STEP := 0.05
+## Нижняя граница: 0 недопустим (GameTree зависнет), берём практический минимум.
+const TIME_MIN := 0.01
+const MAGIC_MIN := 0.0
+## Значения по умолчанию. Время 1 = реальное, магия 0.1 = замедленный полёт
+## для разглядывания эффекта.
+const TIME_DEFAULT := 1.0
+const MAGIC_DEFAULT := 0.1
 
 var hud_canvas: Control
 var school_screen: Control
 var death_screen: Control
+## Экранная постобработка магии: вспышка, виньетка, хроматика на ударе.
+var screen_fx: SpellScreenFx = null
 
 var spell_name: String = ""
 var spell_school: String = ""
@@ -24,6 +38,11 @@ var spell_tint: Color = UiTheme.GOLD
 var _last_spell := ""
 var _last_health := -1.0
 var _hit_flash := 0.0
+## Реакция прицела: разряд при колдовстве и всплеск при попадании.
+var _cast_pulse := 0.0
+var _hit_pulse := 0.0
+var _last_enemy_health := -1.0
+var _hit_target: Node = null
 var _stamina_alpha := 0.0
 var _time := 0.0
 var _school_t := 0.0
@@ -33,8 +52,8 @@ var _interface_scale := 1.0
 var _school_card_rects: Array[Rect2] = []
 var _hovered_school: int = -1
 var _debug_visible := false
-var _time_scale_index := 1
-var _magic_speed_index := 3
+var _time_scale := TIME_DEFAULT
+var _magic_speed := MAGIC_DEFAULT
 
 
 func _ready() -> void:
@@ -57,6 +76,9 @@ func _ready() -> void:
 	get_viewport().size_changed.connect(_apply_interface_scale)
 	_apply_interface_scale()
 	_apply_debug_settings()
+	if player != null and player.spell_caster != null:
+		player.spell_caster.spell_cast.connect(_on_spell_cast)
+	screen_fx = SpellScreenFx.create(self)
 
 func set_interface_scale(value: float) -> void:
 	_interface_scale = clampf(value, 0.5, 2.0)
@@ -127,13 +149,15 @@ func _draw_debug(s: Vector2) -> void:
 
 	var serif := UiTheme.serif()
 	var caps := UiTheme.caps(1)
-	var mult: float = MAGIC_SPEEDS[_magic_speed_index]
+	var mult: float = _magic_speed
 	UiTheme.draw_text(hud_canvas, serif, Vector2(x + 12.0, y + 22.0),
 		"РЕЖИМ ПРОСМОТРА", 17, UiTheme.GOLD, 0.0)
 	UiTheme.draw_text(hud_canvas, caps, Vector2(x + 12.0, y + 44.0),
-		"ВРЕМЯ  %.2f×     [− / =]" % Engine.time_scale, 11, UiTheme.PARCHMENT, 0.0)
+		"ВРЕМЯ  %.2f×     [− / =]   Shift: ступени" % Engine.time_scale, 11,
+		UiTheme.PARCHMENT, 0.0)
 	UiTheme.draw_text(hud_canvas, caps, Vector2(x + 12.0, y + 62.0),
-		"МАГИЯ  %.2f×     [[ / ]]" % mult, 11, UiTheme.PARCHMENT, 0.0)
+		"МАГИЯ  %.2f×     [[ / ]]   Shift: ступени" % mult, 11,
+		UiTheme.PARCHMENT, 0.0)
 
 	var ids := ["fire_bolt", "wind_gust", "water_jet", "stone_shard"]
 	var labels := ["Огонь", "Ветер", "Вода", "Земля"]
@@ -198,11 +222,72 @@ func _draw_resource(serif: Font, caps: Font, caps_tight: Font, x: float, baselin
 		hud_canvas.draw_line(Vector2(x + fill_w, bar_y),
 			Vector2(x + fill_w, bar_y + 5.0), UiTheme.fade(tint, 0.95 * alpha), 1.0, true)
 
+func _on_spell_cast(_id: String) -> void:
+	# Сигнал приходит в момент вылета снаряда: прицел разряжается расходящимся
+	# кольцом, и кисть «отпускает» накопленное.
+	_cast_pulse = 1.0
+	if screen_fx != null:
+		screen_fx.on_cast(spell_tint)
+
+## Попадание по врагу читается по падению HP у цели под прицелом:
+## отдельного сигнала от снаряда не требуется.
+func _track_enemy_hit() -> void:
+	var target: Node = null
+	var ray := player.interact_ray
+	if ray != null:
+		target = ray.get_collider()
+	# Прицел смотрит только на слой интерактивных объектов; враги ловятся
+	# отдельной проверкой по лучу камеры.
+	if target == null or not target.has_method("take_damage"):
+		var cam := player.camera
+		if cam != null:
+			var from := cam.global_position
+			var to := from - cam.global_transform.basis.z * 40.0
+			var query := PhysicsRayQueryParameters3D.create(from, to, 8)
+			# exclude типизирован как Array[RID]: append надёжнее литерала.
+			if player is CollisionObject3D:
+				query.exclude.append((player as CollisionObject3D).get_rid())
+			var hit := cam.get_world_3d().direct_space_state.intersect_ray(query)
+			if not hit.is_empty():
+				target = hit.collider
+	if target == null or not target.has_method("take_damage"):
+		_hit_target = null
+		_last_enemy_health = -1.0
+		return
+	if target != _hit_target:
+		_hit_target = target
+		_last_enemy_health = float(target.get("health"))
+		return
+	var hp := float(target.get("health"))
+	if hp < _last_enemy_health - 0.5:
+		_hit_pulse = 1.0
+		if screen_fx != null and target is Node3D:
+			var dist := (target as Node3D).global_position.distance_to(player.global_position)
+			var heavy := (_last_enemy_health - hp) >= 20.0
+			screen_fx.on_impact(spell_tint, dist, heavy)
+	_last_enemy_health = hp
+
 ## Прицел: точка, четыре засечки; при цели — раскрытое кольцо и подсказка.
 func _draw_reticle(caps: Font, s: Vector2) -> void:
 	var center := s * 0.5
 	var active := player.has_interact_target()
 	var tint := UiTheme.GOLD if active else Color(0.94, 0.94, 0.92, 0.62)
+
+	# Прицел — единственный элемент, который всегда в фокусе внимания.
+	# Каст даёт расходящийся разряд цветом школы, попадание — короткий всплеск.
+	if _cast_pulse > 0.0:
+		var cast_r := 6.0 + (1.0 - _cast_pulse) * 16.0
+		hud_canvas.draw_arc(center, cast_r, 0.0, TAU, 32,
+			UiTheme.fade(spell_tint, _cast_pulse * 0.85), 2.0, true)
+	if _hit_pulse > 0.0:
+		var hit_r := 4.0 + (1.0 - _hit_pulse) * 9.0
+		hud_canvas.draw_arc(center, hit_r, 0.0, TAU, 24,
+			UiTheme.fade(UiTheme.PARCHMENT, _hit_pulse * 0.9), 1.5, true)
+		for i in 4:
+			var ha := TAU * float(i) / 4.0 + PI * 0.25
+			var hd := Vector2(cos(ha), sin(ha))
+			UiTheme.draw_diamond(hud_canvas, center + hd * (hit_r + 5.0), 1.6, 2.6,
+				UiTheme.fade(UiTheme.PARCHMENT, _hit_pulse * 0.7))
 
 	if active:
 		var pulse := 0.5 + 0.5 * sin(_time * 3.4)
@@ -442,10 +527,37 @@ func _draw_death_screen() -> void:
 # ===========================================================================
 
 func _apply_debug_settings() -> void:
-	Engine.time_scale = TIME_SCALES[_time_scale_index] if _debug_visible else 1.0
+	# В обычной игре — реальное время и скорость магии. В режиме просмотра
+	# действуют свободно выставленные значения.
+	Engine.time_scale = maxf(_time_scale, TIME_MIN) if _debug_visible else 1.0
 	if player != null and player.spell_caster != null:
-		player.spell_caster.speed_multiplier = MAGIC_SPEEDS[_magic_speed_index] \
-			if _debug_visible else 1.0
+		player.spell_caster.speed_multiplier = _magic_speed if _debug_visible else 1.0
+
+## Один шаг изменения значения. Без Shift — ровно на step; со Shift — на
+## соседнюю ступень из списка, а если ступени кончились, всё равно на step:
+## жёсткого потолка нет, только разумный предел движка.
+static func _step(from: float, step: float, values: Array, coarse: bool,
+		up: bool) -> float:
+	if not coarse:
+		return from + (step if up else -step)
+	var snapped := _snap(values, from, up)
+	if is_equal_approx(snapped, from):
+		return from + (step if up else -step)
+	return snapped
+
+## Ближайшая ступень из списка — для Shift+клавиша, чтобы не крутить по 0.05.
+static func _snap(values: Array, from: float, up: bool) -> float:
+	var sorted := values.duplicate()
+	sorted.sort()
+	if up:
+		for v in sorted:
+			if v > from + 0.0001:
+				return float(v)
+		return float(sorted[sorted.size() - 1])
+	for i in range(sorted.size() - 1, -1, -1):
+		if float(sorted[i]) < from - 0.0001:
+			return float(sorted[i])
+	return float(sorted[0])
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not event is InputEventKey:
@@ -460,15 +572,21 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not _debug_visible:
 		return
+	# Shift переключает по ступеням (1, 0.5, 0.25, 0.1), без Shift — мелкий шаг.
+	var coarse := key.shift_pressed
 	match key.physical_keycode:
 		KEY_MINUS:
-			_time_scale_index = clampi(_time_scale_index + 1, 0, TIME_SCALES.size() - 1)
+			_time_scale = _step(_time_scale, TIME_STEP, TIME_SCALES, coarse, false)
+			_time_scale = clampf(_time_scale, TIME_MIN, 16.0)
 		KEY_EQUAL:
-			_time_scale_index = clampi(_time_scale_index - 1, 0, TIME_SCALES.size() - 1)
+			_time_scale = _step(_time_scale, TIME_STEP, TIME_SCALES, coarse, true)
+			_time_scale = clampf(_time_scale, TIME_MIN, 16.0)
 		KEY_BRACKETLEFT:
-			_magic_speed_index = clampi(_magic_speed_index - 1, 0, MAGIC_SPEEDS.size() - 1)
+			_magic_speed = _step(_magic_speed, MAGIC_STEP, MAGIC_SPEEDS, coarse, false)
+			_magic_speed = clampf(_magic_speed, MAGIC_MIN, 16.0)
 		KEY_BRACKETRIGHT:
-			_magic_speed_index = clampi(_magic_speed_index + 1, 0, MAGIC_SPEEDS.size() - 1)
+			_magic_speed = _step(_magic_speed, MAGIC_STEP, MAGIC_SPEEDS, coarse, true)
+			_magic_speed = clampf(_magic_speed, MAGIC_MIN, 16.0)
 		_:
 			return
 	_apply_debug_settings()
@@ -516,6 +634,9 @@ func _process(delta: float) -> void:
 		_hit_flash = 0.30
 	_last_health = player.health
 	_hit_flash = move_toward(_hit_flash, 0.0, delta * 1.6)
+	_cast_pulse = move_toward(_cast_pulse, 0.0, delta * 3.4)
+	_hit_pulse = move_toward(_hit_pulse, 0.0, delta * 4.2)
+	_track_enemy_hit()
 
 	var sid := player.spell_caster.selected_spell() if player.spell_caster else ""
 	if sid != _last_spell:
