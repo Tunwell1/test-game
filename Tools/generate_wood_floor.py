@@ -245,18 +245,6 @@ def block_grid(lo, hi, pitch):
 
 # ------------------------------------------------------------- mesh building
 
-# Quantise every emitted attribute to a fixed decimal grid. Without this the GLB
-# depends on the host libm: sin/cos/cross-product jitter around 1e-16 lands in
-# the float32 bytes, so the very same generator produced different files on
-# different machines and the byte-for-byte reproducibility test failed. One
-# micron is far below any visual, collision or shader tolerance.
-DECIMALS = 6
-
-
-def q(value):
-    return round(value, DECIMALS)
-
-
 def sub(a, b):
     return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
 
@@ -271,8 +259,7 @@ def add_tri(tris, a, b, c, prefer=None):
     if prefer is not None and sum(n[k] * prefer[k] for k in range(3)) < 0.0:
         b, c = c, b
         n = tuple(-k for k in n)
-    tris[MAT].append((tuple(q(k) for k in a), tuple(q(k) for k in b),
-                      tuple(q(k) for k in c), tuple(q(k) for k in n)))
+    tris[MAT].append((a, b, c, n))
 
 
 def add_top(tris, poly, y):
