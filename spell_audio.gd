@@ -90,6 +90,44 @@ static func _synth(duration: float, freq_from: float, freq_to: float,
 	wav.format = AudioStreamWAV.FORMAT_16_BITS
 	return wav
 
+## Низкий саб-слой к удару: без него урон звучит «тонко», как клик по стеклу.
+## Синус на 35–60 Гц с очень быстрым затуханием и мягким клиппингом — это
+## не отдельный звук, а вес, который прибавляется к основному.
+static func sub_stream(visual: String) -> AudioStreamWAV:
+	var key := "sub_" + visual
+	if _streams.has(key):
+		return _streams[key]
+	var freq := 42.0
+	var duration := 0.28
+	match visual:
+		"earth":
+			freq = 36.0
+			duration = 0.42
+		"wind":
+			freq = 58.0
+			duration = 0.20
+		"water":
+			freq = 48.0
+			duration = 0.26
+	var sample_rate := 22050
+	var length := int(sample_rate * duration)
+	var data := PackedByteArray()
+	data.resize(length * 2)
+	var phase := 0.0
+	for i in range(length):
+		var t := float(i) / sample_rate
+		var env := exp(-t * (8.0 if visual == "earth" else 14.0))
+		# Огибающая частоты вниз: удар «ухает», а не гудит одной нотой.
+		phase += (freq + 30.0 * exp(-t * 20.0)) * TAU / sample_rate
+		var s := tanh(sin(phase) * 1.8) * env
+		data.encode_s16(i * 2, clampi(int(s * 16000.0), -32768, 32767))
+	var wav := AudioStreamWAV.new()
+	wav.data = data
+	wav.mix_rate = sample_rate
+	wav.format = AudioStreamWAV.FORMAT_16_BITS
+	_streams[key] = wav
+	return wav
+
 ## Позиционное проигрывание с лёгким разбросом питча, узел удаляется сам.
 static func play_at(parent: Node, position: Vector3, stream: AudioStreamWAV,
 		volume_db: float = -6.0, node_name: String = "SpellAudio") -> AudioStreamPlayer3D:

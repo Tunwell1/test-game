@@ -95,9 +95,16 @@ class SpellVisualTests(unittest.TestCase):
 
     def test_cast_has_anticipation_windup(self):
         text = CASTER.read_text(encoding="utf-8")
-        self.assertIn("const CAST_WINDUP := 0.12", text)
+        # 0.12 с — 7 кадров: антиципация не читается. 0.2 с читается как замах.
+        self.assertIn("const CAST_WINDUP := 0.2", text)
+        self.assertIn("const CAST_HAND_OFFSET := Vector3(", text)
         self.assertIn("func _launch(id: String) -> void:", text)
         self.assertIn("func _spawn_cast_fx(cam: Camera3D, tint: Color) -> void:", text)
+        # Сбор энергии и вылет снаряда идут из одной точки у «руки», а не из
+        # центра объектива.
+        self.assertIn("func cast_hand_position(cam: Camera3D) -> Vector3:", text)
+        self.assertIn("proj.global_position = cast_hand_position(cam)", text)
+        self.assertIn("fx.global_position = cast_hand_position(cam)", text)
         self.assertIn("fx.name = \"CastGather\"", text)
         self.assertIn("create_timer(CAST_WINDUP).timeout.connect(_launch.bind(id))", text)
         self.assertIn("player.apply_cast_recoil(", text)
@@ -167,8 +174,8 @@ class SpellVisualTests(unittest.TestCase):
         text = PROJECTILE.read_text(encoding="utf-8")
         self.assertIn("func _make_smoke() -> GPUParticles3D:", text)
         self.assertIn("particles.name = \"SpellSmoke\"", text)
-        self.assertIn('quad.material = _particle_material("soft", Color(0.18', text)
-        self.assertIn("process.scale_curve = _scale_curve(0.6, 1.8)", text)
+        self.assertIn('quad.material = _particle_material("soft", Color(0.16', text)
+        self.assertIn("process.scale_curve = _scale_curve(0.7, 2.4)", text)
         self.assertIn("process.turbulence_enabled = true", text)
         self.assertIn("process.turbulence_noise_speed = Vector3(0.8, 0.8, 0.8)", text)
         self.assertIn("process.turbulence_noise_strength = 0.4 if kind == \"spark\"", text)

@@ -9,8 +9,15 @@ signal selected_changed(spell_id: String)
 
 const M := MagicBook.School
 
-## Антиципация перед вылетом снаряда: короткий «сбор» энергии и отдача камеры.
-const CAST_WINDUP := 0.12
+## Антиципация перед вылетом снаряда: «сбор» энергии и отдача камеры.
+## 0.12 с — это 7 кадров, глаз не успевал прочитать замах; 0.2 с читается
+## как намерение, но всё ещё не мешает стрелять.
+const CAST_WINDUP := 0.2
+
+## Точка «руки» относительно камеры, в метрах: вправо, вниз и вперёд.
+## Эффект сбора и вылет снаряда используют её же — тогда цепочка
+## «энергия собралась → снаряд вылетел» читается как одно движение.
+const CAST_HAND_OFFSET := Vector3(0.32, -0.26, -0.75)
 
 ## Заклинания. noise — шум для стелса (магия безмолвна, поэтому по умолчанию почти 0).
 const SPELLS: Dictionary = {
@@ -145,6 +152,13 @@ func cast(id: String) -> bool:
 	get_tree().create_timer(CAST_WINDUP).timeout.connect(_launch.bind(id))
 	return true
 
+## Мировая точка «руки»: смещение применяется в базисе камеры, чтобы эффект
+## всегда был справа-снизу от прицела, как бы игрок ни повернулся.
+func cast_hand_position(cam: Camera3D) -> Vector3:
+	if cam == null:
+		return Vector3.ZERO
+	return cam.global_position + cam.global_transform.basis * CAST_HAND_OFFSET
+
 ## Вылет снаряда после антиципации. Направление пересчитывается в момент
 ## вылета: игрок мог повернуть камеру за доли секунды «сбора».
 func _launch(id: String) -> void:
@@ -170,7 +184,8 @@ func _launch(id: String) -> void:
 	if parent == null:
 		parent = player.get_parent()
 	parent.add_child(proj)
-	proj.global_position = cam.global_position + proj.direction * 0.8
+	# Снаряд стартует из точки сбора у «руки», а не из центра объектива.
+	proj.global_position = cast_hand_position(cam)
 	spell_cast.emit(id)
 
 ## «Сбор» энергии у камеры: искры сжимаются и гаснут, вспышка света.
@@ -185,30 +200,34 @@ func _spawn_cast_fx(cam: Camera3D, tint: Color) -> void:
 	var fx := Node3D.new()
 	fx.name = "CastGather"
 	parent.add_child(fx)
-	fx.global_position = cam.global_position - cam.global_transform.basis.z * 0.7
+	fx.global_position = cast_hand_position(cam)
 
 	var light := OmniLight3D.new()
 	light.light_color = tint
-	light.light_energy = 1.6
-	light.omni_range = 2.5
+	light.light_energy = 3.2
+	light.omni_range = 3.2
+	light.omni_attenuation = 1.4
 	fx.add_child(light)
 
 	var particles := GPUParticles3D.new()
-	particles.amount = 14
+	particles.amount = 22
 	particles.lifetime = CAST_WINDUP + 0.05
 	particles.one_shot = true
 	particles.local_coords = false
 	particles.visibility_aabb = AABB(Vector3(-1.0, -1.0, -1.0), Vector3(2.0, 2.0, 2.0))
 	var quad := QuadMesh.new()
-	quad.size = Vector2(0.12, 0.12)
+	quad.size = Vector2(0.14, 0.14)
 	var mat := StandardMaterial3D.new()
 	mat.albedo_texture = SpellProjectile._particle_texture("shard")
-	mat.albedo_color = Color(tint.r, tint.g, tint.b, 0.9)
+	# HDR-множитель + аддитивный блендинг: сбор энергии светится, а не
+	# выглядит россыпью серых бумажек.
+	mat.albedo_color = Color(tint.r, tint.g, tint.b, 0.9) * Color(1.7, 1.7, 1.7, 1.0)
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
 	mat.alpha_scissor_threshold = 0.5
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.vertex_color_use_as_albedo = true
 	quad.material = mat
 	particles.draw_pass_1 = quad
@@ -224,11 +243,13 @@ func _spawn_cast_fx(cam: Camera3D, tint: Color) -> void:
 	process.scale_max = 1.2
 	process.color_ramp = SpellProjectile._fade_ramp(0.85)
 	# Частицы сжимаются в точку — читается как «втягивание» энергии.
-	process.scale_curve = SpellProjectile._scale_curve(1.0, 0.1)
+	process.scale_curve = SpellProjectile._scale_curve(1.7, 0.05)
 	particles.process_material = process
 	particles.emitting = true
 	fx.add_child(particles)
 
 	var tween := fx.create_tween()
-	tween.tween_property(light, "light_energy", 0.0, CAST_WINDUP + 0.08)
+	# Свет не просто гаснет: короткий подъём к моменту вылета и резкий спад.
+	tween.tween_property(light, "light_energy", 4.2, CAST_WINDUP * 0.7)
+	tween.tween_property(light, "light_energy", 0.0, CAST_WINDUP * 0.9)
 	get_tree().create_timer(0.5).timeout.connect(fx.queue_free)

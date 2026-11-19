@@ -107,6 +107,9 @@ var land_vel: float = 0.0
 var land_pitch: float = 0.0
 ## Кратковременный пинок FOV при колдовстве (отдача), затухает сам.
 var cast_fov_kick: float = 0.0
+## Импульс отдачи камеры при колдовстве: тянет прицел вниз-назад и отпускает.
+var cast_kick_pitch: float = 0.0
+var cast_kick_roll: float = 0.0
 var bob_y: float = 0.0
 var fall_speed: float = 0.0
 var _interact_target: Object = null
@@ -562,19 +565,26 @@ func _apply_camera_feel(delta: float) -> void:
 	# Наклон камеры при движении вбок (strafe tilt)
 	var local_vel := global_transform.basis.inverse() * velocity
 	var target_roll := -local_vel.x / sprint_speed * deg_to_rad(tilt_max_deg)
-	camera.rotation.z = lerpf(camera.rotation.z, target_roll, delta * 8.0)
+	camera.rotation.z = lerpf(camera.rotation.z, target_roll + cast_kick_roll, delta * 8.0)
 
 	# Лёгкий наклон головы вверх при прыжке/падении
 	# + наклон вперёд при беге + толчок при приземлении
-	var target_pitch := clampf(velocity.y * 0.004, -0.04, 0.04) - sprint_blend * deg_to_rad(sprint_lean_deg) + land_pitch
+	var target_pitch := clampf(velocity.y * 0.004, -0.04, 0.04) - sprint_blend * deg_to_rad(sprint_lean_deg) + land_pitch + cast_kick_pitch
 	camera.rotation.x = lerpf(camera.rotation.x, target_pitch, delta * 10.0)
 
-## Короткая отдача при колдовстве: пинок FOV и лёгкий подброс камеры вверх.
-func apply_cast_recoil(fov_kick: float = 2.5, pitch_kick: float = 0.03) -> void:
+## Короткая отдача при колдовстве: пинок FOV, подброс камеры и лёгкий крен.
+## Слишком слабая отдача читается как «камера стоит на рельсах» — магия
+## кажется наклейкой. 5° FOV и 4° подброса хватает, чтобы тело отозвалось.
+func apply_cast_recoil(fov_kick: float = 5.0, pitch_kick: float = 0.04) -> void:
 	cast_fov_kick = maxf(cast_fov_kick, fov_kick)
 	land_pitch = clampf(land_pitch + pitch_kick, -0.12, 0.12)
+	cast_kick_pitch = clampf(cast_kick_pitch + pitch_kick * 1.4, -0.15, 0.15)
+	cast_kick_roll = clampf(cast_kick_roll + 0.02, -0.06, 0.06)
 
 func _apply_fov_change(delta: float) -> void:
+	# Отдача гасится всегда, даже если динамический FOV выключен.
+	cast_kick_pitch = lerpf(cast_kick_pitch, 0.0, delta * 9.0)
+	cast_kick_roll = lerpf(cast_kick_roll, 0.0, delta * 9.0)
 	if not fov_change:
 		return
 

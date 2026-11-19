@@ -97,6 +97,7 @@ func _ready() -> void:
 	collision_mask = 1 | 4 | 8
 	body_entered.connect(_on_body_entered)
 	# Звук полёта запускается только после входа в дерево (иначе play() ошибется).
+	# Снаряд создаётся уже после антиципации, поэтому звук совпадает с вылетом.
 	var flight := SpellAudio.play_at(self, Vector3.ZERO,
 		SpellAudio.flight_stream(visual), -16.0, "SpellFlightAudio")
 	if flight != null:
@@ -129,8 +130,11 @@ func configure() -> void:
 
 	_light = OmniLight3D.new()
 	_light.light_color = tint
-	_light.omni_range = 3.4 if visual == "earth" else 4.0
-	_light.light_energy = 0.8 if visual == "wind" else 1.0
+	_light.omni_range = 4.2 if visual == "earth" else 5.4
+	# Свет должен читаться в коридоре с направленным солнцем: энергия > 1
+	# нужна и для узкого HDR-glow, и для реального пятна на стенах.
+	_light.light_energy = 1.8 if visual == "wind" else 2.6
+	_light.omni_attenuation = 1.4
 	add_child(_light)
 
 	if visual == "fire":
@@ -238,18 +242,21 @@ void fragment() {
 	float facing = abs(dot(normalize(NORMAL), normalize(VIEW)));
 	float rim = step(0.80, 1.0 - facing);
 	float facet = step(0.0, NORMAL.y) * 0.12;
-	vec3 col = tint.rgb * (0.85 + facet);
+	// Ядро выходит за 1.0 и попадает в узкий HDR-glow: снаряд светится.
+	vec3 col = tint.rgb * (1.25 + facet);
+	// Полосы втрое медленнее: на объекте 0.2 м полосы на прежней скорости
+	// превращались в мерцающий шум, а не в движение пламени/потока.
 	if (mode < 0.5) {
-		float band = step(0.0, sin(v_local.y * 26.0 - TIME * speed * 12.0));
-		col = mix(col, vec3(1.0, 0.90, 0.55), band * 0.35);
+		float band = step(0.0, sin(v_local.y * 24.0 - TIME * speed * 3.5));
+		col = mix(col, vec3(1.9, 1.5, 0.8), band * 0.35);
 	} else if (mode < 1.5) {
-		float band = step(0.0, sin(v_local.x * 30.0 - TIME * speed * 14.0));
+		float band = step(0.0, sin(v_local.x * 26.0 - TIME * speed * 4.0));
 		col *= 0.70 + 0.30 * band;
 	} else {
-		float band = step(0.0, sin(v_local.y * 24.0 - TIME * speed * 10.0));
+		float band = step(0.0, sin(v_local.y * 22.0 - TIME * speed * 3.0));
 		col *= 0.85 + 0.15 * band;
 	}
-	col = mix(col, vec3(1.0), rim * 0.85);
+	col = mix(col, vec3(2.2), rim * 0.85);
 	ALBEDO = col;
 	ALPHA = tint.a;
 }
@@ -282,19 +289,53 @@ func _body_material() -> Material:
 		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	return mat
 
-## Все частицы — альфа-cutout: чёткий силуэт, никаких полупрозрачных ореолов.
-## Цвет ramp перемножается с альбедо только для выцветания, не для размытия.
+## Частицы делятся на два класса.
+## «Энергия» (искра, струя, осколок) — аддитивная: свет складывается с фоном,
+## поэтому ядро выходит за 1.0 и попадает в узкий HDR-glow. Силуэт держит
+## ALPHA_SCISSOR (альфа-блендинг порог отсечения игнорирует — именно из-за
+## этого искры раньше выглядели бумажными).
+## «Материя» (дым, пыль, камень) — обычная альфа: она должна затемнять фон.
+const ENERGY_PARTICLES := ["spark", "streak", "droplet", "shard"]
+
 func _particle_material(kind: String, color: Color) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.albedo_texture = _particle_texture(kind)
-	mat.albedo_color = color
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.alpha_scissor_threshold = 0.5
 	mat.vertex_color_use_as_albedo = true
+	if ENERGY_PARTICLES.has(kind):
+		# Цвет умножается на HDR-множитель: только так узкий glow его видит.
+		mat.albedo_color = Color(color.r, color.g, color.b,
+			color.a) * Color(1.7, 1.7, 1.7, 1.0)
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+		mat.alpha_scissor_threshold = 0.5
+		mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	else:
+		mat.albedo_color = color
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+		# Мягкая точка: жёсткий гексагон на дыме читается как серые
+		# многоугольники. У энергии (искры) силуэт остаётся геометрическим.
+		mat.albedo_texture = _soft_dot_texture()
 	return mat
+
+## Мягкий круг для дыма и пыли: плотное ядро, плавная кромка.
+static var _soft_dot: ImageTexture = null
+
+static func _soft_dot_texture() -> ImageTexture:
+	if _soft_dot != null:
+		return _soft_dot
+	var size := 64
+	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
+	var centre := Vector2(float(size - 1) * 0.5, float(size - 1) * 0.5)
+	for y in size:
+		for x in size:
+			var d := Vector2(float(x), float(y)).distance_to(centre) / centre.x
+			var a := clampf(1.0 - d, 0.0, 1.0)
+			img.set_pixel(x, y, Color(1.0, 1.0, 1.0, a * a * (1.5 - 0.5 * d)))
+	_soft_dot = ImageTexture.create_from_image(img)
+	return _soft_dot
 
 # --- След ------------------------------------------------------------------
 
@@ -303,7 +344,7 @@ func _make_trail() -> GPUParticles3D:
 	particles.name = "SpellTrail"
 	# Один проход: никаких мягких ядер и аддитивных ореолов.
 	particles.draw_passes = 1
-	particles.lifetime = 0.45
+	particles.lifetime = 0.7
 	particles.local_coords = false
 	particles.visibility_aabb = AABB(Vector3(-1.5, -1.5, -1.5), Vector3(3.0, 3.0, 3.0))
 
@@ -331,31 +372,31 @@ func _make_trail() -> GPUParticles3D:
 	var process := ParticleProcessMaterial.new()
 	match visual:
 		"fire":
-			particles.amount = 30
-			particles.lifetime = 0.55
+			particles.amount = 38
+			particles.lifetime = 0.8
 			process.direction = Vector3(0.0, 1.0, 0.0)
 			process.spread = 35.0
 			process.initial_velocity_min = 0.4
 			process.initial_velocity_max = 1.2
 			process.gravity = Vector3(0.0, 1.5, 0.0)
 		"wind":
-			particles.amount = 22
-			particles.lifetime = 0.28
+			particles.amount = 30
+			particles.lifetime = 0.5
 			process.direction = Vector3(0.0, 0.0, 1.0)
 			process.spread = 18.0
 			process.initial_velocity_min = 0.8
 			process.initial_velocity_max = 1.8
 			process.gravity = Vector3.ZERO
 		"water":
-			particles.amount = 26
+			particles.amount = 32
 			process.direction = Vector3(0.0, 0.0, 1.0)
 			process.spread = 28.0
 			process.initial_velocity_min = 0.5
 			process.initial_velocity_max = 1.1
 			process.gravity = Vector3(0.0, -1.0, 0.0)
 		"earth":
-			particles.amount = 24
-			particles.lifetime = 0.7
+			particles.amount = 28
+			particles.lifetime = 0.85
 			process.direction = Vector3(0.0, 0.3, 1.0)
 			process.spread = 45.0
 			process.initial_velocity_min = 0.2
@@ -378,13 +419,13 @@ func _make_trail() -> GPUParticles3D:
 func _make_smoke() -> GPUParticles3D:
 	var particles := GPUParticles3D.new()
 	particles.name = "SpellSmoke"
-	particles.amount = 12
-	particles.lifetime = 0.65
+	particles.amount = 18
+	particles.lifetime = 1.1
 	particles.local_coords = false
 	particles.visibility_aabb = AABB(Vector3(-1.0, -1.0, -1.0), Vector3(2.0, 2.0, 2.0))
 	var quad := QuadMesh.new()
-	quad.size = Vector2(0.36, 0.36)
-	quad.material = _particle_material("soft", Color(0.18, 0.16, 0.15, 0.20))
+	quad.size = Vector2(0.42, 0.42)
+	quad.material = _particle_material("soft", Color(0.16, 0.14, 0.13, 0.26))
 	particles.draw_pass_1 = quad
 	var process := ParticleProcessMaterial.new()
 	process.direction = Vector3(0.0, 1.0, 0.0)
@@ -399,7 +440,7 @@ func _make_smoke() -> GPUParticles3D:
 	process.scale_min = 0.4
 	process.scale_max = 0.9
 	process.color_ramp = _fade_ramp(0.85)
-	process.scale_curve = _scale_curve(0.6, 1.8)
+	process.scale_curve = _scale_curve(0.7, 2.4)
 	particles.process_material = process
 	particles.emitting = true
 	return particles
@@ -485,39 +526,39 @@ func _spawn_impact(body: Node3D, normal: Vector3 = Vector3.ZERO) -> void:
 	n = n.normalized()
 
 	var ring_color := tint
-	var ring_life := 0.4
+	var ring_life := 0.6
 	var ring_scale := 2.8
 	var flash_energy := 2.5
 	match visual:
 		"fire":
-			ring_life = 0.45
+			ring_life = 0.6
 			ring_scale = 2.4
-			flash_energy = 4.5
-			fx.add_child(_make_burst(26, Color(1.0, 0.55, 0.15, 0.9), 0.5, 1.4,
-				0.55, 0.16, Vector3(0.0, 1.8, 0.0), 40.0, "spark"))
+			flash_energy = 9.0
+			fx.add_child(_make_burst(34, Color(1.0, 0.55, 0.15, 0.9), 0.6, 1.8,
+				0.7, 0.18, Vector3(0.0, 1.8, 0.0), 40.0, "spark"))
 		"wind":
 			ring_color = Color(0.80, 0.95, 1.0)
-			ring_life = 0.28
+			ring_life = 0.4
 			ring_scale = 4.2
-			flash_energy = 2.0
-			fx.add_child(_make_burst(30, Color(0.85, 0.96, 1.0, 0.7), 1.2, 2.6,
-				0.35, 0.22, Vector3.ZERO, 180.0, "streak"))
+			flash_energy = 4.0
+			fx.add_child(_make_burst(34, Color(0.85, 0.96, 1.0, 0.7), 1.4, 3.0,
+				0.45, 0.24, Vector3.ZERO, 180.0, "streak"))
 		"water":
 			ring_color = Color(0.35, 0.65, 1.0)
-			ring_life = 0.35
+			ring_life = 0.5
 			ring_scale = 2.6
-			flash_energy = 2.8
-			fx.add_child(_make_burst(28, Color(0.45, 0.72, 1.0, 0.85), 0.6, 1.6,
-				0.5, 0.16, Vector3(0.0, -2.0, 0.0), 70.0, "droplet"))
+			flash_energy = 5.5
+			fx.add_child(_make_burst(34, Color(0.45, 0.72, 1.0, 0.85), 0.7, 1.8,
+				0.6, 0.17, Vector3(0.0, -2.0, 0.0), 70.0, "droplet"))
 			var burn: Variant = body.get("burn_timer") if body != null else null
 			if burn != null and float(burn) > 0.0:
 				fx.add_child(_make_burst(22, Color(0.92, 0.96, 1.0, 0.45), 0.3, 0.9,
 					0.7, 0.22, Vector3(0.0, 1.2, 0.0), 60.0, "soft"))
 		"earth":
 			ring_color = Color(0.62, 0.52, 0.40)
-			ring_life = 0.5
+			ring_life = 0.7
 			ring_scale = 2.0
-			flash_energy = 1.2
+			flash_energy = 3.5
 			fx.add_child(_make_burst(32, Color(0.53, 0.44, 0.33, 0.85), 0.3, 1.0,
 				0.75, 0.24, Vector3(0.0, -2.5, 0.0), 80.0, "shard"))
 
@@ -526,14 +567,17 @@ func _spawn_impact(body: Node3D, normal: Vector3 = Vector3.ZERO) -> void:
 	flash.name = "ImpactFlash"
 	flash.light_color = ring_color
 	flash.light_energy = flash_energy
-	flash.omni_range = 5.0
+	flash.omni_range = 6.5
+	flash.omni_attenuation = 1.5
 	fx.add_child(flash)
 
 	if visual == "earth":
 		_heavy_hitstop()
 
-	# Звук удара в цвет школы.
+	# Звук удара в цвет школы + низкий саб-слой: высокий «хлопок» без низа
+	# звучит дёшево, вес удара даёт именно саб.
 	SpellAudio.play_at(fx, Vector3.ZERO, SpellAudio.impact_stream(visual), -6.0, "ImpactAudio")
+	SpellAudio.play_at(fx, Vector3.ZERO, SpellAudio.sub_stream(visual), -10.0, "ImpactSubAudio")
 
 	# След на поверхности: копоть, мокрое пятно, трещина. Ветер следов не оставляет.
 	var decal_kind := ""
@@ -554,7 +598,10 @@ func _spawn_impact(body: Node3D, normal: Vector3 = Vector3.ZERO) -> void:
 	ring_mat.albedo_color = Color(ring_color.r, ring_color.g, ring_color.b, 0.8)
 	ring_mat.emission_enabled = true
 	ring_mat.emission = ring_color
+	ring_mat.emission_energy_multiplier = 2.2
 	ring_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	# Кольцо тоже светится (HDR) — иначе оно читается как серый обруч.
+	ring_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 	torus.material = ring_mat
 	var ring := MeshInstance3D.new()
 	ring.mesh = torus
@@ -565,7 +612,9 @@ func _spawn_impact(body: Node3D, normal: Vector3 = Vector3.ZERO) -> void:
 	tween.tween_property(ring, "scale", Vector3(ring_scale, ring_scale, ring_scale), ring_life)
 	tween.parallel().tween_property(ring_mat, "albedo_color",
 		Color(ring_color.r, ring_color.g, ring_color.b, 0.0), ring_life)
-	tween.parallel().tween_property(flash, "light_energy", 0.0, ring_life * 1.1)
+	# Свет удара гаснет быстрее кольца: импульс должен быть резким, а не
+	# «лампой, которую медленно выключают».
+	tween.parallel().tween_property(flash, "light_energy", 0.0, 0.16)
 	get_tree().create_timer(0.9, true, false, true).timeout.connect(fx.queue_free)
 
 ## Короткий hitstop для тяжёлого удара камня. Таймер игнорирует time_scale
