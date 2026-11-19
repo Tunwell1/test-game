@@ -57,6 +57,32 @@ class GdScriptStatic(unittest.TestCase):
         finally:
             target.write_text(original, encoding="utf-8")
 
+    def test_builtin_api_calls_exist(self):
+        """Методы встроенных классов Godot существуют: парсер их не проверяет.
+
+        Именно так прошла ошибка "Nonexistent function 'add_normal' in base
+        'SurfaceTool'": файл парсился, но метод не существовал.
+        """
+        result = self._run(sys.executable, str(TOOLS / "check_gdscript_symbols.py"))
+        self.assertNotIn("нет такого метода", result.stdout,
+                         "вызов несуществующего метода:\n" + result.stdout)
+
+    def test_checker_catches_unknown_builtin_method(self):
+        """Проверка проверки: выдуманный метод SurfaceTool должен падать."""
+        target = ROOT / "spell_visuals.gd"
+        original = target.read_text(encoding="utf-8")
+        broken = original.replace("st.set_normal(Vector3(0.0, side, 0.0))",
+                                  "st.add_normal(Vector3(0.0, side, 0.0))")
+        self.assertNotEqual(original, broken, "в _wind_plume нет set_normal")
+        try:
+            target.write_text(broken, encoding="utf-8")
+            result = self._run(sys.executable,
+                               str(TOOLS / "check_gdscript_symbols.py"))
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("add_normal", result.stdout)
+        finally:
+            target.write_text(original, encoding="utf-8")
+
     def test_shader_semantics(self):
         """Шейдеры из строк GDScript: varying, DEPTH, texture(), вызовы."""
         result = self._run(sys.executable, str(TOOLS / "check_shaders.py"))

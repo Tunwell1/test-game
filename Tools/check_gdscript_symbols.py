@@ -156,6 +156,112 @@ def check_string_calls(classes):
     return problems
 
 
+
+# --- API встроенных классов -------------------------------------------------
+# Godot не проверяет такие вызовы до запуска, а мы не можем запустить Godot.
+# Поэтому держим список методов тех классов, которые реально используем.
+# Ошибка "Nonexistent function 'add_normal' in base 'SurfaceTool'" — именно
+# из этого класса: парсер её не видит, чекер без таблицы тоже.
+BUILTIN_API = {
+    "SurfaceTool": {
+        "begin", "add_vertex", "add_index", "set_normal", "set_uv", "set_uv2",
+        "set_color", "set_tangent", "set_bones", "set_weights", "set_smooth_group",
+        "set_custom", "set_custom_format", "generate_normals", "generate_tangents",
+        "index", "deindex", "commit", "commit_to_arrays", "clear", "create_from",
+        "create_from_arrays", "append_from", "optimize_indices_for_cache",
+        "generate_lod", "set_material", "get_primitive_type", "add_triangle_fan",
+    },
+    "Image": {
+        "create", "create_empty", "set_pixel", "get_pixel", "set_pixelv",
+        "get_pixelv", "fill", "fill_rect", "blit_rect", "blend_rect", "resize",
+        "save_png", "load", "lock", "unlock", "get_width", "get_height",
+        "get_data", "set_data", "convert", "generate_mipmaps", "flip_x", "flip_y",
+    },
+    "ImageTexture": {"create_from_image", "set_image", "update", "get_image"},
+    "Gradient": {"add_point", "remove_point", "set_color", "set_offset",
+                 "get_color", "get_offset", "interpolate", "set_offsets",
+                 "set_colors", "add_point"},
+    "Curve": {"add_point", "remove_point", "set_point_value", "sample",
+              "sample_baked", "clear_points", "get_point_count"},
+    "ParticleProcessMaterial": {
+        "set_param_min", "set_param_max", "set_param_texture", "set_gravity",
+        "set_direction", "set_spread", "set_initial_velocity_min",
+        "set_initial_velocity_max", "set_scale_min", "set_scale_max",
+        "set_scale_curve", "set_color_ramp", "set_turbulence_enabled",
+    },
+    "Mesh": {"get_aabb", "get_surface_count", "surface_get_arrays", "get_rid"},
+    "ArrayMesh": {"add_surface_from_arrays", "clear_surfaces",
+                  "surface_get_arrays", "get_surface_count"},
+    "Tween": {"tween_property", "tween_interval", "tween_callback",
+              "tween_method", "parallel", "set_parallel", "set_loops",
+              "set_speed_scale", "set_process_mode", "set_pause_mode",
+              "set_trans", "set_ease", "chain", "kill", "is_running",
+              "is_valid", "bind_node", "stop"},
+    "Tween_property": {"set_delay", "set_trans", "set_ease", "from",
+                       "from_current", "as_relative"},
+    "ShaderMaterial": {"set_shader_parameter", "get_shader_parameter",
+                       "set_shader", "get_shader"},
+    "StandardMaterial3D": set(),
+    "Basis": {"looking_at", "from_euler", "get_rotation_quaternion",
+              "scaled", "transposed", "inverse"},
+    "Vector3": {"normalized", "length", "length_squared", "dot", "cross",
+                "distance_to", "lerp", "snapped", "rotated", "move_toward",
+                "slerp", "project", "bounce", "reflect", "abs", "sign",
+                "clamp", "floor", "ceil", "round", "direction_to",
+                "posmod", "inverse_lerp"},
+    "Vector2": {"normalized", "length", "length_squared", "dot", "angle",
+                "distance_to", "lerp", "rotated", "move_toward", "abs",
+                "clamp", "floor", "ceil", "round", "direction_to", "angle_to"},
+    "Color": {"lerp", "darkened", "lightened", "to_html", "from_html",
+              "blend", "clamp", "inverted", "linear_to_srgb", "srgb_to_linear"},
+    "Transform3D": {"looking_at", "inverse", "orthonormalized", "scaled",
+                    "translated", "rotated", "rotated_local"},
+    "Quaternion": {"slerp", "normalized", "inverse", "angle_to", "from_euler"},
+}
+
+# Члены-значения (не методы), чтобы не считать их ошибкой при проверке вызовов.
+BUILTIN_FIELDS = {
+    "Basis": set("xyz"),
+    "Vector3": {"x", "y", "z", "ONE", "ZERO", "UP", "DOWN", "LEFT", "RIGHT",
+                "FORWARD", "BACK", "INF"},
+    "Vector2": {"x", "y", "ONE", "ZERO", "UP", "DOWN", "LEFT", "RIGHT"},
+    "Color": {"r", "g", "b", "a", "WHITE", "BLACK", "RED", "GREEN", "BLUE",
+              "TRANSPARENT"},
+}
+
+# Переменные, тип которых известен по конструктору: var st := SurfaceTool.new()
+CTOR_VAR_RE = re.compile(r"\bvar\s+(\w+)\s*(?::\s*\w+)?\s*:?=\s*(\w+)\.new\(")
+
+
+def check_builtin_api(files):
+    """Ловит вызовы методов, которых нет у встроенных классов Godot."""
+    problems = []
+    for path in files:
+        text = path.read_text(encoding="utf-8")
+        typed = {m.group(1): m.group(2) for m in CTOR_VAR_RE.finditer(text)}
+        for var_name, cls in typed.items():
+            if cls not in BUILTIN_API:
+                continue
+            allowed = BUILTIN_API[cls] | BUILTIN_FIELDS.get(cls, set())
+            # Только ВЫЗОВЫ: свойство с тем же именем — не ошибка, а поле.
+            for member in re.findall(
+                    r"\b%s\.(\w+)\s*\(" % re.escape(var_name), text):
+                if member not in allowed:
+                    problems.append(
+                        f"{path.relative_to(ROOT)}: {var_name}({cls}).{member} — "
+                        f"у {cls} нет такого метода")
+        # Статические вызовы Class.new() и Class.method()
+        for cls, member in re.findall(r"\b(\w+)\.(\w+)\s*\(", text):
+            if cls not in BUILTIN_API or member == "new":
+                continue
+            allowed = BUILTIN_API[cls] | BUILTIN_FIELDS.get(cls, set())
+            if member not in allowed:
+                problems.append(
+                    f"{path.relative_to(ROOT)}: {cls}.{member}() — "
+                    f"у {cls} нет такого метода")
+    return problems
+
+
 def main() -> int:
     files = collect_files()
     classes = build_table(files)
@@ -209,6 +315,10 @@ def main() -> int:
     #    как «Function not found in base self».
     string_calls = check_string_calls(classes)
     problems.extend(string_calls)
+
+    # 5) Методы встроенных классов: ровно тот класс ошибок, что дал
+    #    "Nonexistent function 'add_normal' in base 'SurfaceTool'".
+    problems.extend(check_builtin_api(files))
 
     if problems:
         print("НЕРАЗРЕШЁННЫЕ ОБРАЩЕНИЯ (%d):" % len(problems))

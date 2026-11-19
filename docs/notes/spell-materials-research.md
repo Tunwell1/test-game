@@ -217,3 +217,27 @@ ALPHA *= clamp(abs(dot(normalize(NORMAL), normalize(VIEW))) * 1.6, 0.0, 1.0);
 Единственный линейный слой, который остался, — штрихи скорости: 10 тонких
 плоскостей (0.42 × 0.01), летящих назад от наконечника. Они показывают
 скорость, а не форму.
+
+## Раунд 10: `add_normal` — третий класс ошибок, который не ловился
+
+Рантайм: `Invalid call. Nonexistent function 'add_normal' in base 'SurfaceTool'`.
+
+У `SurfaceTool` нет `add_normal`: нормаль задаётся через `set_normal()` и
+применяется к последующим `add_vertex()`. У него есть только `add_vertex` и
+`add_index` — «add_*» для атрибутов не существует. Ошибка прошла потому, что:
+
+* `gdparse` видит только синтаксис;
+* мой чекер символов проверял `class_name`-классы проекта, а `SurfaceTool` —
+  встроенный класс движка;
+* `gdlint` такое не смотрит.
+
+Теперь в `Tools/check_gdscript_symbols.py` есть таблица API встроенных классов
+(`SurfaceTool`, `Image`, `ImageTexture`, `Gradient`, `Curve`, `Tween`,
+`ParticleProcessMaterial`, `Basis`, `Vector3`, `Vector2`, `Color`,
+`Transform3D`, `Quaternion` и др.). Проверяются только **вызовы**:
+`st.add_normal(` — ошибка, `mat.albedo_color = ...` — свойство, не ошибка.
+
+Добавлены тесты:
+* `test_builtin_api_calls_exist` — в проекте нет вызовов несуществующих методов;
+* `test_checker_catches_unknown_builtin_method` — проверка проверки: если
+  вернуть `add_normal`, чекер обязан упасть.

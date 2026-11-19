@@ -177,11 +177,10 @@ static func _wind_plume() -> ArrayMesh:
 	var z0 := 0.35
 	var z1 := z0 - LENGTH
 	# Один квад, две стороны (трение об обе поверхности потока).
+	# ВАЖНО: у SurfaceTool нет add_normal — нормаль задаётся set_normal и
+	# применяется к следующим add_vertex. Иначе — «Nonexistent function».
 	for side in [1.0, -1.0]:
-		var n := Vector3(0.0, side, 0.0)
-		st.set_normal(n)
-		st.add_normal(n); st.add_normal(n); st.add_normal(n)
-		st.add_normal(n); st.add_normal(n); st.add_normal(n)
+		st.set_normal(Vector3(0.0, side, 0.0))
 		var a := Vector3(-HALF_W, 0.0, z0)
 		var b := Vector3(HALF_W, 0.0, z0)
 		var c := Vector3(HALF_W, 0.0, z1)
