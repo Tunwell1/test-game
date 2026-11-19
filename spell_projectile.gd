@@ -25,8 +25,7 @@ var _light: OmniLight3D = null
 var _smoke: GPUParticles3D = null
 ## Медленные шлейфы пламени: второй слой огня, который остаётся в мире.
 var _flames: GPUParticles3D = null
-## Наконечник-полумесяц ветра и штрихи скорости: отдельные слои, не тело.
-var _crescent: MeshInstance3D = null
+## Штрихи скорости ветра: единственный «линейный» слой, показывает скорость.
 var _streaks: GPUParticles3D = null
 ## Пул: снаряд не удаляется после попадания, а гаснет и возвращается в пул.
 ## Поле публичное (pooled), т.к. его выставляет пул, а не сам снаряд.
@@ -164,9 +163,6 @@ func rebuild_for(new_visual: String) -> void:
 	if _light != null:
 		_light.queue_free()
 		_light = null
-	if _crescent != null:
-		_crescent.queue_free()
-		_crescent = null
 	if _streaks != null:
 		_streaks.queue_free()
 		_streaks = null
@@ -224,8 +220,6 @@ func apply_tint(new_tint: Color, new_visual: String = "") -> void:
 		_set_particle_color(_smoke, Color(0.16, 0.14, 0.13, 0.26))
 	if _flames != null:
 		_set_particle_color(_flames, Color(1.0, 0.62, 0.22, 0.55))
-	if _crescent != null and _crescent.material_override is ShaderMaterial:
-		(_crescent.material_override as ShaderMaterial).set_shader_parameter("tint", tint)
 	if _streaks != null:
 		_set_particle_color(_streaks, Color(tint.r, tint.g, tint.b, 0.6))
 	if _light != null:
@@ -276,29 +270,20 @@ func launch() -> void:
 ## Каждый слой — отдельный инстанс со своим материалом, поэтому «ветер» не
 ## читается одной трубой.
 func _build_wind_extras() -> void:
-	var crescent := MeshInstance3D.new()
-	crescent.name = "WindCrescent"
-	_crescent = crescent
-	crescent.mesh = SpellVisuals.wind_crescent_mesh()
-	var c_mat := SpellVisuals.body_material("wind", tint)
-	c_mat.set_shader_parameter("core_boost", 1.0)
-	c_mat.set_shader_parameter("distortion", 0.0)
-	crescent.material_override = c_mat
-	crescent.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(crescent)
-
-	# Штрихи скорости: тонкие плоскости по бокам вихря, всегда к камере.
+	# Штрихи скорости: тонкие плоскости в мире, летящие назад от наконечника.
+	# Это единственная «линия» во всём ветре — она показывает скорость, а не
+	# форму, поэтому её видно и без каркасного эффекта.
 	var streaks := GPUParticles3D.new()
 	streaks.name = "WindStreaks"
 	_streaks = streaks
-	streaks.amount = 14
-	streaks.lifetime = 0.28
-	streaks.local_coords = true
-	streaks.visibility_aabb = AABB(Vector3(-1.0, -1.0, -2.2), Vector3(2.0, 2.0, 4.0))
+	streaks.amount = 10
+	streaks.lifetime = 0.30
+	streaks.local_coords = false
+	streaks.visibility_aabb = AABB(Vector3(-2.0, -2.0, -3.0), Vector3(4.0, 4.0, 6.0))
 	var quad := QuadMesh.new()
-	quad.size = Vector2(0.34, 0.012)
+	quad.size = Vector2(0.42, 0.010)
 	var smat := StandardMaterial3D.new()
-	smat.albedo_color = Color(1.0, 1.0, 1.0, 0.55)
+	smat.albedo_color = Color(1.0, 1.0, 1.0, 0.5)
 	smat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	smat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	smat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
@@ -308,19 +293,18 @@ func _build_wind_extras() -> void:
 	quad.material = smat
 	streaks.draw_pass_1 = quad
 	var sp := ParticleProcessMaterial.new()
-	# Штрихи летят назад от наконечника вдоль потока — это и есть «скорость».
-	sp.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-	sp.emission_box_extents = Vector3(0.10, 0.10, 0.05)
+	sp.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	sp.emission_sphere_radius = 0.12
 	sp.direction = Vector3(0.0, 0.0, -1.0)
-	sp.spread = 22.0
-	sp.initial_velocity_min = 2.4
-	sp.initial_velocity_max = 4.2
+	sp.spread = 30.0
+	sp.initial_velocity_min = 1.8
+	sp.initial_velocity_max = 3.4
 	sp.gravity = Vector3.ZERO
-	sp.scale_min = 0.7
-	sp.scale_max = 1.5
-	sp.color_ramp = _fade_ramp(0.35)
+	sp.scale_min = 0.6
+	sp.scale_max = 1.4
+	sp.color_ramp = _fade_ramp(0.3)
 	streaks.process_material = sp
-	streaks.position = Vector3(0.0, 0.0, 0.28)
+	streaks.position = Vector3(0.0, 0.0, 0.30)
 	add_child(streaks)
 
 ## Повернуть тело по направлению полёта. Тела строятся вдоль +Z, при этом
@@ -337,9 +321,6 @@ func _align_body() -> void:
 	# вокруг мировых осей (из-за этого он «складывался» в куб).
 	b = b * Basis(Vector3(0.0, 0.0, 1.0), _spin)
 	_mesh.global_transform.basis = b
-	if _crescent != null:
-		# Наконечник ориентируется так же, но без кувырка.
-		_crescent.global_transform.basis = Basis.looking_at(-dir, Vector3.UP)
 
 ## Возврат в пул: снаряд гаснет и засыпает вместо queue_free. Визуальные
 ## эффекты попадания уже отвязаны от снаряда и живут в сцене сами.

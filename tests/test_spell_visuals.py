@@ -41,7 +41,7 @@ class SpellVisualTests(unittest.TestCase):
         self.assertIn("func _build_mesh() -> Mesh:", text)
         self.assertIn("return SpellVisuals.body_mesh(visual)", text)
         visuals = VISUALS.read_text(encoding="utf-8")
-        for fn in ("_flame_spindle(", "_wind_ribbons(", "_droplet(", "_rock("):
+        for fn in ("_flame_spindle(", "_wind_plume(", "_droplet(", "_rock("):
             self.assertIn("static func %s" % fn, visuals)
         self.assertIn("const KIND_FIRE := 0", visuals)
         self.assertIn("const KIND_EARTH := 3", visuals)
@@ -255,39 +255,37 @@ class SpellVisualTests(unittest.TestCase):
         text = PROJECTILE.read_text(encoding="utf-8")
         self.assertIn("_light.shadow_enabled = true", text)
 
-    def test_wind_matches_reference_layers(self):
-        """Ветер как на референсе Romain Coste: слои, а не одна труба.
+    def test_wind_is_soft_plume_not_wireframe(self):
+        """Ветер — мягкое вещество, а не линии и не каркас.
 
-        Там читается: мягкие закрученные ленты, яркий полумесяц-наконечник,
-        тонкие штрихи скорости и мусор в вихре.
+        Прошлая версия умножала альфу на dot(NORMAL, VIEW). У плоской ленты это
+        ноль, когда она смотрит в камеру: лицо исчезало, оставались рёбра —
+        отсюда «белый каркас».
         """
         visuals = VISUALS.read_text(encoding="utf-8")
-        for fn in ("_wind_ribbons(", "_wind_crescent("):
-            self.assertIn("static func %s" % fn, visuals)
-        # Ленты идут по спирали: угол растёт вдоль оси.
-        ribbons = visuals.split("static func _wind_ribbons()", 1)[1] \
-            .split("static func _wind_crescent()", 1)[0]
-        self.assertIn("var twist := 9.0 + float(k) * 1.7", ribbons)
-        self.assertIn("var a := phase + t * twist", ribbons)
         air = visuals.split("static func _air_shader()", 1)[1] \
             .split("static func _liquid_shader()", 1)[0]
-        # Светлая слоистая дымка с мягкой альфой, а не неон.
-        self.assertIn("float density = smoothstep(0.25, 0.85", air)
-        self.assertIn("vec3 plume = tint.rgb * (0.55 + 0.65 * density);", air)
-        # Наконечник ярче остального тела.
-        self.assertIn("plume += tint.rgb * core_boost * 1.6;", air)
-        self.assertIn("uniform float core_boost = 0.0;", air)
-        # Преломление осталось добавкой, а не основой.
-        self.assertIn("hint_screen_texture", air)
-        self.assertIn("uniform float distortion = 0.02;", air)
+        # Альфа не зависит от нормали.
+        self.assertNotIn("dot(normalize(NORMAL)", air)
+        self.assertIn("ALPHA = clamp(density * 0.95 + nose * 0.35", air)
+        # Слои вещества: две адвекции + рваный край по шуму.
+        self.assertIn("float a = fbm3(p);", air)
+        self.assertIn("float b = fbm3(q);", air)
+        self.assertIn("float density = body * smoothstep(0.22, 0.78", air)
+        self.assertIn("density += body * 0.42", air)
+        # Цилиндрический билборд: ширина квада доворачивается к камере.
+        self.assertIn("vec3 side_world = cross(axis_world, to_cam);", air)
+        # Обычный конвейер Godot: никакого skip_vertex_transform с мировыми
+        # координатами в VERTEX — это был бы вид «из ниоткуда».
+        self.assertNotIn("skip_vertex_transform", air)
+        # Тело ветра — один квад, а не набор лент и трубок.
+        self.assertIn("static func _wind_plume() -> ArrayMesh:", visuals)
+        self.assertNotIn("_wind_ribbons", visuals)
 
         text = PROJECTILE.read_text(encoding="utf-8")
-        self.assertIn("func _build_wind_extras() -> void:", text)
-        self.assertIn('crescent.name = "WindCrescent"', text)
         self.assertIn('streaks.name = "WindStreaks"', text)
-        self.assertIn('c_mat.set_shader_parameter("core_boost", 1.0)', text)
-        # Штрихи скорости летят назад от наконечника.
-        self.assertIn("sp.direction = Vector3(0.0, 0.0, -1.0)", text)
+        # Штрихи — единственный линейный слой и он тонкий по высоте.
+        self.assertIn("quad.size = Vector2(0.42, 0.010)", text)
 
     def test_water_is_transparent_liquid(self):
         """Вода: преломление, fresnel и поглощение по толщине, не заливка."""
