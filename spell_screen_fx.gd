@@ -27,10 +27,21 @@ static func create(host: Node) -> SpellScreenFx:
 	var fx := SpellScreenFx.new()
 	fx.name = "SpellScreenFx"
 	fx.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	fx.set_anchors_preset(Control.PRESET_FULL_RECT)
 	fx.material = _material()
 	host.add_child(fx)
+	# ВАЖНО: родитель — CanvasLayer, а не Control. В этом случае anchors НЕ
+	# раскладывают узел, и ColorRect остался бы размером 0x0 (эффект не виден).
+	# Поэтому размер задаём от вьюпорта и следим за его изменением.
+	fx._sync_size()
+	if not fx.get_viewport().size_changed.is_connected(fx._sync_size):
+		fx.get_viewport().size_changed.connect(fx._sync_size)
 	return fx
+
+func _sync_size() -> void:
+	var vp := get_viewport()
+	if vp != null:
+		size = vp.get_visible_rect().size
+		position = Vector2.ZERO
 
 static func _material() -> ShaderMaterial:
 	var mat := ShaderMaterial.new()
@@ -44,6 +55,9 @@ static func _get_shader() -> Shader:
 	shader.code = """
 shader_type canvas_item;
 
+// В Godot 4 SCREEN_TEXTURE не встроен: его нужно объявить как uniform
+// с hint_screen_texture, иначе шейдер не компилируется.
+uniform sampler2D screen_tex : hint_screen_texture, filter_linear_mipmap;
 uniform vec4 flash_color : source_color = vec4(1.0, 0.5, 0.15, 1.0);
 uniform float flash = 0.0;
 uniform float focus = 0.0;
@@ -54,9 +68,9 @@ void fragment() {
 	vec2 uv = SCREEN_UV;
 	// Хроматика: разводим каналы к краям кадра, а не целиком.
 	vec2 offset = (uv - 0.5) * aberration * 0.02;
-	float r = texture(SCREEN_TEXTURE, uv + offset).r;
-	float g = texture(SCREEN_TEXTURE, uv).g;
-	float b = texture(SCREEN_TEXTURE, uv - offset).b;
+	float r = texture(screen_tex, uv + offset).r;
+	float g = texture(screen_tex, uv).g;
+	float b = texture(screen_tex, uv - offset).b;
 	vec3 col = vec3(r, g, b);
 
 	// Виньетка: базовая + сжатие на касте.

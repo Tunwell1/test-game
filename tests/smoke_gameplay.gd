@@ -18,7 +18,7 @@ var _skipped: Array[String] = []
 ## Помощник собирает все живые и не спящие снаряды пула.
 func _live_projectiles() -> Array:
 	var found: Array = []
-	var pools := get_root().get_tree().get_nodes_in_group("spell_pool")
+	var pools := get_nodes_in_group("spell_pool")
 	for pool in pools:
 		for child in pool.get_children():
 			if child is SpellProjectile and child.visible \
@@ -225,12 +225,12 @@ func _spell_projectiles_distinct(scene: Node, player: Node) -> bool:
 	var impact_ok := false
 	for child in _live_projectiles():
 		child.call("_apply_hit", dummy, Vector3.UP)
-			if scene.find_child("SpellImpact", true, false) != null \
-					and scene.find_child("ImpactFlash", true, false) != null \
-					and scene.find_child("ImpactAudio", true, false) != null \
-					and scene.find_child("SpellDecal", true, false) != null:
-				impact_ok = true
-			break
+		if scene.find_child("SpellImpact", true, false) != null \
+				and scene.find_child("ImpactFlash", true, false) != null \
+				and scene.find_child("ImpactAudio", true, false) != null \
+				and scene.find_child("SpellDecal", true, false) != null:
+			impact_ok = true
+		break
 	if not impact_ok:
 		ok = false
 	dummy.queue_free()
@@ -264,7 +264,7 @@ func _pool_reuses_projectile(scene: Node, player: Node) -> bool:
 	if caster == null:
 		return false
 	player.set("mana", 999.0)
-	var pools := get_root().get_tree().get_nodes_in_group("spell_pool")
+	var pools := get_nodes_in_group("spell_pool")
 	if pools.is_empty():
 		return false
 	var pool: Node = pools[0]

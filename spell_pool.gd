@@ -50,32 +50,37 @@ func acquire(visual: String) -> SpellProjectile:
 	var spare := _take_any_free()
 	if spare != null:
 		spare.apply_tint(spare.tint, visual)
-		_in_use[spare._body_key] = int(_in_use.get(spare._body_key, 0)) + 1
+		_in_use[spare.body_cache_key] = int(_in_use.get(spare.body_cache_key, 0)) + 1
 		return spare
 	var proj := SpellProjectile.new()
 	proj.visual = visual
 	proj.configure()
-	proj._pooled = true
+	proj.mark_pooled(true)
 	add_child(proj)
 	_all.append(proj)
 	_in_use[key] = int(_in_use.get(key, 0)) + 1
 	return proj
 
 ## Любой свободный снаряд: используется как заготовка под другую школу.
+## Ключ забираем и «схлопываем» пустой бакет, иначе в _free копятся пустые
+## массивы, и release() с acquire() перестают сходиться.
 func _take_any_free() -> SpellProjectile:
-	for key in _free:
+	for key in _free.keys():
 		var bucket: Array = _free[key]
 		while not bucket.is_empty():
 			var candidate: SpellProjectile = bucket.pop_back()
 			if is_instance_valid(candidate) and candidate.get_parent() == self:
+				if bucket.is_empty():
+					_free.erase(key)
 				return candidate
+		_free.erase(key)
 	return null
 
 ## Вернуть снаряд. Вызывается самим снарядом в `_recycle()`.
 func release(proj: SpellProjectile) -> void:
 	if proj == null or not is_instance_valid(proj):
 		return
-	var key := proj._body_key
+	var key := proj.body_cache_key
 	_in_use[key] = maxi(int(_in_use.get(key, 0)) - 1, 0)
 	var bucket: Array = _free.get(key, [])
 	# Лишние экземпляры не копим: пул должен оставаться маленьким.

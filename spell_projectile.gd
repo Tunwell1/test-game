@@ -24,8 +24,10 @@ var _smoke: GPUParticles3D = null
 ## Медленные шлейфы пламени: второй слой огня, который остаётся в мире.
 var _flames: GPUParticles3D = null
 ## Пул: снаряд не удаляется после попадания, а гаснет и возвращается в пул.
-var _pooled: bool = false
-var _body_key: String = ""
+## Поле публичное (pooled), т.к. его выставляет пул, а не сам снаряд.
+var pooled: bool = false
+## Ключ материала тела: по нему пул раскладывает свободные снаряды.
+var body_cache_key: String = ""
 ## Базовый цвет материала: пул перекрашивает снаряд, не создавая новый.
 var _mesh_mat: Material = null
 var _emission_base: Color = Color.WHITE
@@ -112,13 +114,17 @@ func _exit_tree() -> void:
 		if child is AudioStreamPlayer3D:
 			(child as AudioStreamPlayer3D).stop()
 
+## Взять/вернуть булев флаг пула явно, чтобы пул не лез в «приватное» поле.
+func mark_pooled(value: bool = true) -> void:
+	pooled = value
+
 ## Материал тела зависит от школы; форма у камня и огня общая, но цвет разный,
 ## поэтому пул различает снаряды по ключу «школа + форма».
 static func body_key(visual: String) -> String:
 	return visual if visual != "" else "default"
 
 func configure() -> void:
-	_body_key = body_key(visual)
+	body_cache_key = body_key(visual)
 	var shape := CollisionShape3D.new()
 	var sphere := SphereShape3D.new()
 	sphere.radius = 0.2
@@ -137,7 +143,7 @@ func rebuild_for(new_visual: String) -> void:
 	if new_visual == visual and _mesh != null:
 		return
 	visual = new_visual
-	_body_key = body_key(new_visual)
+	body_cache_key = body_key(new_visual)
 	if _mesh != null:
 		_mesh.queue_free()
 		_mesh = null
@@ -258,7 +264,7 @@ func _recycle() -> void:
 	if _smoke != null:
 		_smoke.emitting = false
 	visible = false
-	if _pooled:
+	if pooled:
 		# Настоящий пул: убираем из сцены и держим в резерве.
 		var pool := get_tree().get_first_node_in_group("spell_pool")
 		if pool != null and pool.has_method("release"):
@@ -273,6 +279,7 @@ func _build_mesh() -> Mesh:
 	# читается как наклейка, а наложение трёх объёмов даёт «клубок пламени».
 	if visual == "fire":
 		return _fire_body()
+	match visual:
 		"wind":
 			return _ribbon(0.16, 0.55, 1.5)
 		"water":
@@ -891,8 +898,11 @@ func _spawn_impact(body: Node3D, normal: Vector3 = Vector3.ZERO) -> void:
 	# остаток (0.5 с). Одиночная короткая вспышка не успевает «лечь» на стены,
 	# поэтому помещение не реагирует на магию.
 	if flash != null:
-		tween.parallel().tween_property(flash, "light_energy", flash_energy * 0.35, 0.16)
-		tween.parallel().tween_property(flash, "light_energy", 0.0, 0.55).set_delay(0.16)
+		# Отдельный твин: два Tweener на одно свойство в одном Tween
+		# конфликтуют (это прямо запрещено в документации Tween).
+		var ft := flash.create_tween()
+		ft.tween_property(flash, "light_energy", flash_energy * 0.30, 0.14)
+		ft.tween_property(flash, "light_energy", 0.0, 0.55)
 	get_tree().create_timer(0.9, true, false, true).timeout.connect(fx.queue_free)
 
 ## Пятно света на поверхности: дешёвый способ показать, что удар «зажёг»
