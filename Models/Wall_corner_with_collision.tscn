@@ -1,0 +1,31 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="PackedScene" path="res://Models/Wall_with_collision.tscn" id="1_arm"]
+
+[sub_resource type="StandardMaterial3D" id="Material_corner_post"]
+albedo_color = Color(0.529412, 0.321569, 0.184314, 1)
+roughness = 1.0
+
+[sub_resource type="BoxMesh" id="BoxMesh_corner_post"]
+material = SubResource("Material_corner_post")
+size = Vector3(1.197, 6, 1.197)
+
+[sub_resource type="BoxShape3D" id="BoxShape_corner_post"]
+size = Vector3(1.197, 6, 1.197)
+
+[node name="WallCorner" type="Node3D"]
+
+[node name="ArmX" parent="." instance=ExtResource("1_arm")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.007502, 0, -0.184629)
+
+[node name="ArmZ" parent="." instance=ExtResource("1_arm")]
+transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, -0.184629, 0, 6.402498)
+
+[node name="CornerPost" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.6, 3, -0.6)
+
+[node name="Mesh" type="MeshInstance3D" parent="CornerPost"]
+mesh = SubResource("BoxMesh_corner_post")
+
+[node name="Shape" type="CollisionShape3D" parent="CornerPost"]
+shape = SubResource("BoxShape_corner_post")
