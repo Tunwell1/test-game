@@ -50,7 +50,7 @@ static func emit_strength(visual: String) -> float:
 static func body_mesh(visual: String) -> ArrayMesh:
 	match kind_of(visual):
 		KIND_WIND:
-			return _air_stream()
+			return _wind_ribbons()
 		KIND_WATER:
 			return _droplet(0.115, 0.40)
 		KIND_EARTH:
@@ -151,38 +151,92 @@ static func _rock(radius: float, facets: int) -> ArrayMesh:
 	return st.commit()
 
 
-## Ветер: не отдельное «тело», а длинная струя за наконечником. Форма —
-## веретено, вытянутое назад, с мягким срезом. Всё, что видит игрок, — это
-## преломление фона внутри струи, поэтому геометрия обязана быть длинной и
-## гладкой: короткие ленты читаются как палки.
-static func _air_stream() -> ArrayMesh:
+## ВЕТЕР — по референсу Romain Coste (VFX Wind pack, Niagara).
+##
+## Разбор того, из чего там состоит ветер:
+##   1) несколько мягких белых лент, закрученных в спираль вокруг оси;
+##   2) наконечник — яркий полумесяц, «рассекающий» воздух;
+##   3) тонкие прямые штрихи скорости по краям;
+##   4) мелкий мусор (щепки, пыль), который вихрь тащит с собой — именно он
+##      доказывает, что воздух движется, а не просто нарисован.
+## Ни одна из этих деталей не является телом с гранями: это плоские ленты и
+## отдельные плоскости, всегда развёрнутые к камере. Поэтому и не читалось как
+## «параллелепипеды» у прошлых версий — они были замкнутой геометрией.
+
+## Ленты вихря: плоские полосы, идущие по спирали вокруг оси полёта.
+## each-лента живёт на своём радиусе и своём сдвиге фазы, поэтому пучок
+## читается как один закрученный поток, а не как набор трубок.
+static func _wind_ribbons() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var rings := 16
-	var segments := 14
-	var prev := PackedVector3Array()
-	for i in rings + 1:
-		var t := float(i) / float(rings)
-		# Наконечник (t=0) острый, дальше струя расширяется и тает к хвосту.
-		var r := 0.105 * sin(pow(t, 0.75) * PI) * (1.0 - 0.15 * t)
-		var z := (0.25 - t) * 1.8
-		var ring := PackedVector3Array()
-		for j in segments:
-			var a := TAU * float(j) / float(segments)
-			# Лёгкая волна по кромке: струя не идеальный цилиндр.
-			var wobble := 1.0 + 0.10 * sin(a * 3.0 + t * 10.0)
-			ring.append(Vector3(cos(a) * r * wobble, sin(a) * r * wobble, z))
-		if i > 0:
-			for j in segments:
-				var j2 := (j + 1) % segments
-				st.add_vertex(prev[j]); st.add_vertex(ring[j]); st.add_vertex(ring[j2])
-				st.add_vertex(prev[j]); st.add_vertex(ring[j2]); st.add_vertex(prev[j2])
-		prev = ring
+	var ribbons := 5
+	var segs := 34
+	for k in ribbons:
+		var phase := TAU * float(k) / float(ribbons)
+		var radius := 0.055 + 0.028 * float(k % 3)
+		var twist := 9.0 + float(k) * 1.7
+		var prev_c := Vector3.ZERO
+		var prev_s := Vector3.ZERO
+		for i in segs + 1:
+			var t := float(i) / float(segs)
+			# Лента: широкая у наконечника, сужается в хвост и сходит на нет.
+			var taper := sin(pow(t, 0.55) * PI)
+			var width := (0.055 + 0.03 * sin(t * 6.0 + phase)) * taper
+			var a := phase + t * twist
+			var c := Vector3(cos(a) * radius * taper * 1.4,
+				sin(a) * radius * taper * 1.4,
+				0.34 - t * 1.9)
+			# Направление вдоль ленты: касательная к спирали.
+			var tangent := Vector3(-sin(a) * radius * twist,
+				cos(a) * radius * twist, -1.9).normalized()
+			var side := tangent.cross(Vector3(0.0, 0.0, 1.0))
+			if side.length() < 0.01:
+				side = Vector3(1.0, 0.0, 0.0)
+			side = side.normalized() * width
+			if i > 0:
+				# Двусторонняя лента: обе стороны видны с любого ракурса.
+				st.add_vertex(prev_c - prev_s); st.add_vertex(c - side)
+				st.add_vertex(c + side)
+				st.add_vertex(prev_c - prev_s); st.add_vertex(c + side)
+				st.add_vertex(prev_c + prev_s)
+				st.add_vertex(prev_c + prev_s); st.add_vertex(c + side)
+				st.add_vertex(c - side)
+				st.add_vertex(prev_c + prev_s); st.add_vertex(c - side)
+				st.add_vertex(prev_c - prev_s)
+			prev_c = c
+			prev_s = side
+	st.generate_normals()
+	return st.commit()
+
+
+## Наконечник: плоский полумесяц-«резец», смотрящий по полёту. В референсе это
+## самая яркая часть — она и сообщает, что поток рассекает воздух.
+static func _wind_crescent() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var segs := 20
+	var outer := 0.20
+	var inner := 0.145
+	for i in segs:
+		var a0 := lerpf(-PI * 0.72, PI * 0.72, float(i) / float(segs))
+		var a1 := lerpf(-PI * 0.72, PI * 0.72, float(i + 1) / float(segs))
+		var p0 := Vector3(cos(a0) * outer, sin(a0) * outer, 0.30)
+		var p1 := Vector3(cos(a1) * outer, sin(a1) * outer, 0.30)
+		var q0 := Vector3(cos(a0) * inner, sin(a0) * inner, 0.26)
+		var q1 := Vector3(cos(a1) * inner, sin(a1) * inner, 0.26)
+		st.add_vertex(p0); st.add_vertex(q0); st.add_vertex(q1)
+		st.add_vertex(p0); st.add_vertex(q1); st.add_vertex(p1)
 	st.generate_normals()
 	return st.commit()
 
 
 # --- Материалы --------------------------------------------------------------
+
+## Меш наконечника ветра — отдельно от тела: у него свой материал с
+## усиленным свечением, поэтому он живёт отдельным инстансом.
+static func wind_crescent_mesh() -> ArrayMesh:
+	return _wind_crescent()
+
 
 static func body_material(visual: String, tint: Color) -> ShaderMaterial:
 	var mat := ShaderMaterial.new()
@@ -318,19 +372,21 @@ void fragment() {
 """
 
 
-## ВЕТЕР.
-## Воздух невидим: видно только то, как он искажает мир. Поэтому у ветра нет
-## «тела» — только длинная струя за снарядом, которая сдвигает фон по шуму и
-## краем показывает «плёнку» наружу. Прошлая версия оставляла в кадре три
-## крученые ленты-параллелепипеда — это читалось как геометрия, а не воздух.
+## ВЕТЕР (шейдер).
+## Слоевая модель из референса: мягкая светлая дымка внутри лент + яркий
+## полумесяц наконечника + тонкие штрихи скорости. Всё освещённое, белое, с
+## очень мягкой альфой и без аддитивного свечения в ядре — «плотный воздух»,
+## а не неон. Преломление фона осталось, но как добавка, а не как основа:
+## чистого искажения в игре почти не видно на тёмном фоне.
 static func _air_shader() -> String:
 	return """
 shader_type spatial;
 render_mode blend_mix, cull_disabled, depth_draw_never, shadows_disabled;
 
-uniform vec4 tint : source_color = vec4(0.86, 0.93, 1.0, 1.0);
-uniform float distortion = 0.06;
+uniform vec4 tint : source_color = vec4(0.93, 0.96, 1.0, 1.0);
 uniform float speed = 1.0;
+uniform float distortion = 0.02;
+uniform float core_boost = 0.0;   // > 0 только у наконечника
 uniform sampler2D screen_tex : hint_screen_texture, filter_linear_mipmap;
 
 varying vec3 v_local;
@@ -339,36 +395,44 @@ varying vec3 v_local;
 
 void vertex() {
 	v_local = VERTEX;
+	// Ленты дышат в полёте: волна бежит от наконечника в хвост.
+	float along = clamp((0.34 - v_local.z) / 1.9, 0.0, 1.0);
+	VERTEX.xy += normalize(vec3(VERTEX.xy, 0.0001)) \
+		* sin(TIME * 8.0 * speed - along * 11.0) * 0.012 * along;
 }
 
 void fragment() {
-	// along: 0 — наконечник впереди, 1 — хвост струи. Струя тянется назад,
-	// поэтому за снарядом воздух «течёт» в кадре сам собой.
-	float along = clamp((v_local.z + 0.9) / 1.8, 0.0, 1.0);
+	// along 0 — наконечник, 1 — хвост.
+	float along = clamp((0.34 - v_local.z) / 1.9, 0.0, 1.0);
 
-	// Турбулентность течёт вдоль струи и заметно быстрее снаряда: именно
-	// движение возмущения, а не форма, читается как поток воздуха.
-	vec3 p = vec3(v_local.xy * 5.0, along * 7.0 - TIME * speed * 7.0);
+	// Турбулентность течёт вдоль ленты заметно быстрее снаряда: именно
+	// движение возмущения читается как поток.
+	vec3 p = vec3(v_local.xy * 7.0, v_local.z * 3.0 + TIME * speed * 5.0);
 	float turb = fbm3(p);
-	float fine = fbm3(p * 2.7 + vec3(0.0, 0.0, -TIME * speed * 11.0));
+	float wisps = fbm3(p * 2.4 + vec3(0.0, 0.0, TIME * speed * 8.0));
 
-	// Смещение фона: единственное, что реально показывает воздух.
-	vec2 offset = (vec2(turb, fine) - 0.5) * distortion * (1.0 - along * 0.45);
-	vec3 behind = texture(screen_tex, SCREEN_UV + offset).rgb;
+	// Фон слегка искажается — воздух всё-таки движется.
+	vec3 behind = texture(screen_tex,
+		SCREEN_UV + (vec2(turb, wisps) - 0.5) * distortion).rgb;
 
-	// Границы струи по радиусу: ядро полностью прозрачное, края ловят свет.
-	float radius = length(v_local.xy) / 0.115;
-	float edge = smoothstep(0.35, 1.0, radius);
+	// Светлая дымка: белый, чуть подкрашенный, с плотностью по шуму.
+	float density = smoothstep(0.25, 0.85, turb * 0.65 + wisps * 0.55);
+	vec3 plume = tint.rgb * (0.55 + 0.65 * density);
+	plume = mix(plume, behind * 0.6 + tint.rgb * 0.5, 0.25);
 
-	// Плёнка по кромке: чуть светлее фона, чтобы форма читалась без заливки.
-	vec3 film = (behind + tint.rgb * 0.22) * 0.55 + tint.rgb * 0.06;
-	ALBEDO = mix(behind * 1.02, film, edge * 0.75);
-	EMISSION = behind * 0.06 * (1.0 - edge);
-	ALPHA = clamp(edge * (0.10 + 0.22 * turb) + turb * 0.05, 0.0, 0.5);
-	ALPHA *= 1.0 - smoothstep(0.75, 1.0, along) * 0.8;
-	ROUGHNESS = 0.9;
+	// Наконечник светится сильнее — там воздух сжат.
+	plume += tint.rgb * core_boost * 1.6;
+
+	ALBEDO = plume;
+	EMISSION = plume * (0.10 + 0.35 * density + core_boost * 0.9);
+	// Альфа: разреженная дымка, к хвосту сходит на нет. Никакой заливки.
+	ALPHA = clamp((0.18 + 0.42 * density) * (1.0 - along * 0.75)
+		+ core_boost * 0.55, 0.0, 0.9);
+	ROUGHNESS = 0.85;
 	METALLIC = 0.0;
-	SPECULAR = 0.0;
+	SPECULAR = 0.15;
+	// Мягкая граница силуэта вместо ступеньки.
+	ALPHA *= clamp(abs(dot(normalize(NORMAL), normalize(VIEW))) * 1.6, 0.0, 1.0);
 }
 """
 

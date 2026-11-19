@@ -25,6 +25,9 @@ var _light: OmniLight3D = null
 var _smoke: GPUParticles3D = null
 ## Медленные шлейфы пламени: второй слой огня, который остаётся в мире.
 var _flames: GPUParticles3D = null
+## Наконечник-полумесяц ветра и штрихи скорости: отдельные слои, не тело.
+var _crescent: MeshInstance3D = null
+var _streaks: GPUParticles3D = null
 ## Пул: снаряд не удаляется после попадания, а гаснет и возвращается в пул.
 ## Поле публичное (pooled), т.к. его выставляет пул, а не сам снаряд.
 var pooled: bool = false
@@ -161,6 +164,12 @@ func rebuild_for(new_visual: String) -> void:
 	if _light != null:
 		_light.queue_free()
 		_light = null
+	if _crescent != null:
+		_crescent.queue_free()
+		_crescent = null
+	if _streaks != null:
+		_streaks.queue_free()
+		_streaks = null
 	build_visuals()
 
 func build_visuals() -> void:
@@ -173,6 +182,8 @@ func build_visuals() -> void:
 	_mesh.scale = Vector3.ONE * 0.35
 	# Все тела строятся вдоль +Z — это ось полёта, поворачивать не нужно.
 	add_child(_mesh)
+	if visual == "wind":
+		_build_wind_extras()
 	_trail = _make_trail()
 	if _trail != null:
 		add_child(_trail)
@@ -213,6 +224,10 @@ func apply_tint(new_tint: Color, new_visual: String = "") -> void:
 		_set_particle_color(_smoke, Color(0.16, 0.14, 0.13, 0.26))
 	if _flames != null:
 		_set_particle_color(_flames, Color(1.0, 0.62, 0.22, 0.55))
+	if _crescent != null and _crescent.material_override is ShaderMaterial:
+		(_crescent.material_override as ShaderMaterial).set_shader_parameter("tint", tint)
+	if _streaks != null:
+		_set_particle_color(_streaks, Color(tint.r, tint.g, tint.b, 0.6))
 	if _light != null:
 		_light.light_color = tint
 
@@ -249,10 +264,64 @@ func launch() -> void:
 		_smoke.restart()
 	if _flames != null:
 		_flames.restart()
+	if _streaks != null:
+		_streaks.restart()
 	var flight := SpellAudio.play_at(self, Vector3.ZERO,
 		SpellAudio.flight_stream(visual), -16.0, "SpellFlightAudio")
 	if flight != null:
 		flight.max_distance = 18.0
+
+## Ветер состоит не из одного тела. По референсу Romain Coste это слои:
+## яркий полумесяц-наконечник, мягкие ленты вихря и тонкие штрихи скорости.
+## Каждый слой — отдельный инстанс со своим материалом, поэтому «ветер» не
+## читается одной трубой.
+func _build_wind_extras() -> void:
+	var crescent := MeshInstance3D.new()
+	crescent.name = "WindCrescent"
+	_crescent = crescent
+	crescent.mesh = SpellVisuals.wind_crescent_mesh()
+	var c_mat := SpellVisuals.body_material("wind", tint)
+	c_mat.set_shader_parameter("core_boost", 1.0)
+	c_mat.set_shader_parameter("distortion", 0.0)
+	crescent.material_override = c_mat
+	crescent.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(crescent)
+
+	# Штрихи скорости: тонкие плоскости по бокам вихря, всегда к камере.
+	var streaks := GPUParticles3D.new()
+	streaks.name = "WindStreaks"
+	_streaks = streaks
+	streaks.amount = 14
+	streaks.lifetime = 0.28
+	streaks.local_coords = true
+	streaks.visibility_aabb = AABB(Vector3(-1.0, -1.0, -2.2), Vector3(2.0, 2.0, 4.0))
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.34, 0.012)
+	var smat := StandardMaterial3D.new()
+	smat.albedo_color = Color(1.0, 1.0, 1.0, 0.55)
+	smat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	smat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	smat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	smat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	smat.albedo_texture = _particle_texture("streak")
+	smat.vertex_color_use_as_albedo = true
+	quad.material = smat
+	streaks.draw_pass_1 = quad
+	var sp := ParticleProcessMaterial.new()
+	# Штрихи летят назад от наконечника вдоль потока — это и есть «скорость».
+	sp.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	sp.emission_box_extents = Vector3(0.10, 0.10, 0.05)
+	sp.direction = Vector3(0.0, 0.0, -1.0)
+	sp.spread = 22.0
+	sp.initial_velocity_min = 2.4
+	sp.initial_velocity_max = 4.2
+	sp.gravity = Vector3.ZERO
+	sp.scale_min = 0.7
+	sp.scale_max = 1.5
+	sp.color_ramp = _fade_ramp(0.35)
+	streaks.process_material = sp
+	streaks.position = Vector3(0.0, 0.0, 0.28)
+	add_child(streaks)
 
 ## Повернуть тело по направлению полёта. Тела строятся вдоль +Z, при этом
 ## -Z у Godot — «вперёд» камеры, поэтому одного look_at недостаточно.
@@ -268,6 +337,9 @@ func _align_body() -> void:
 	# вокруг мировых осей (из-за этого он «складывался» в куб).
 	b = b * Basis(Vector3(0.0, 0.0, 1.0), _spin)
 	_mesh.global_transform.basis = b
+	if _crescent != null:
+		# Наконечник ориентируется так же, но без кувырка.
+		_crescent.global_transform.basis = Basis.looking_at(-dir, Vector3.UP)
 
 ## Возврат в пул: снаряд гаснет и засыпает вместо queue_free. Визуальные
 ## эффекты попадания уже отвязаны от снаряда и живут в сцене сами.
@@ -390,8 +462,10 @@ func _make_trail() -> GPUParticles3D:
 			# Ветер — это в первую очередь преломление в теле. Частицы здесь
 			# не изображают воздух, а показывают, что поток несёт: пыль,
 			# которую он подхватил по дороге.
-			kind = "streak"
-			base_size = 0.07
+			# Вихрь тащит мусор: щепки и пылинки. Именно они показывают, что
+			# воздух движется, а не нарисован.
+			kind = "shard"
+			base_size = 0.045
 		"water":
 			# Не «искры воды», а разлетающиеся брызги: мягкие капли.
 			kind = "droplet"
@@ -405,7 +479,11 @@ func _make_trail() -> GPUParticles3D:
 
 	var quad := QuadMesh.new()
 	quad.size = Vector2(base_size, base_size)
-	quad.material = particle_material(kind, Color(tint.r, tint.g, tint.b, 0.85))
+	var pcolor := Color(tint.r, tint.g, tint.b, 0.85)
+	if visual == "wind":
+		# Мусор в вихре светлее тона заклинания: это не «магия», это пыль.
+		pcolor = Color(0.92, 0.92, 0.9, 0.75)
+	quad.material = particle_material(kind, pcolor)
 	particles.draw_pass_1 = quad
 
 	var process := ParticleProcessMaterial.new()
@@ -419,13 +497,18 @@ func _make_trail() -> GPUParticles3D:
 			process.initial_velocity_max = 1.2
 			process.gravity = Vector3(0.0, 1.5, 0.0)
 		"wind":
-			particles.amount = 7
-			particles.lifetime = 0.35
+			particles.amount = 12
+			particles.lifetime = 0.55
 			process.direction = Vector3(0.0, 0.0, 1.0)
-			process.spread = 12.0
-			process.initial_velocity_min = 1.2
-			process.initial_velocity_max = 2.4
-			process.gravity = Vector3.ZERO
+			process.spread = 55.0
+			process.initial_velocity_min = 0.4
+			process.initial_velocity_max = 1.4
+			# Мусор кружит: искривление траектории даёт вихрь.
+			process.gravity = Vector3(0.0, 0.35, 0.0)
+			process.turbulence_enabled = true
+			process.turbulence_noise_strength = 1.6
+			process.turbulence_noise_scale = 0.7
+			process.turbulence_noise_speed = Vector3(1.6, 1.6, 1.2)
 		"water":
 			particles.amount = 34
 			process.direction = Vector3(0.0, 0.0, 1.0)
@@ -458,9 +541,11 @@ func _make_trail() -> GPUParticles3D:
 			process.scale_curve = _scale_curve(1.0, 0.6)
 		_:
 			process.scale_curve = _scale_curve(1.0, 0.3)
-	if visual == "fire" or visual == "wind":
+	# Ветер настраивает турбулентность сам выше (мусор должен кружить),
+	# поэтому общий блок его не трогает.
+	if visual == "fire":
 		process.turbulence_enabled = true
-		process.turbulence_noise_strength = 0.35 if visual == "fire" else 0.8
+		process.turbulence_noise_strength = 0.35
 		process.turbulence_noise_scale = 1.2
 		process.turbulence_noise_speed = Vector3(0.8, 0.8, 0.8)
 	particles.process_material = process

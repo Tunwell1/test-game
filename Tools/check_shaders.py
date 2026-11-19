@@ -51,8 +51,10 @@ def shader_blocks():
             chunk = text[start:m.start() + 6000]
             codes = BLOCK_RE.findall(chunk)
             code = "\n".join(codes)
+            # Дополнительно: весь файл — чтобы видеть vertex() из других блоков.
+            whole = "\n".join(BLOCK_RE.findall(text))
             if "shader_type" in code:
-                yield rel, code
+                yield rel, code, whole
 
 
 def strip_comments(code):
@@ -62,15 +64,19 @@ def strip_comments(code):
     return "\n".join(out)
 
 
-def check(rel, raw):
+def check(rel, raw, full=None):
     problems = []
     code = strip_comments(raw)
+    # Проверка varying делается по полному тексту шейдера: он собирается из
+    # нескольких строковых блоков конкатенацией, и vertex() может оказаться
+    # в другом блоке.
+    scope = strip_comments(full) if full else code
     if "shader_type" not in code:
         return problems
 
     # 1) varying должен быть присвоен там, где его читают.
     for name in re.findall(r"\bvarying\s+\w+\s+(\w+)\s*;", code):
-        assigned = re.search(r"\b%s\s*=" % re.escape(name), code)
+        assigned = re.search(r"\b%s\s*=" % re.escape(name), scope)
         if not assigned:
             problems.append(f"{rel}: varying {name} объявлен, но не присвоен")
 
@@ -106,9 +112,9 @@ def check(rel, raw):
 def main() -> int:
     all_problems = []
     count = 0
-    for rel, code in shader_blocks():
+    for rel, code, full in shader_blocks():
         count += 1
-        all_problems.extend(check(rel, code))
+        all_problems.extend(check(rel, code, full))
     if all_problems:
         print("ПРОБЛЕМЫ В ШЕЙДЕРАХ (%d):" % len(all_problems))
         for p in sorted(set(all_problems)):

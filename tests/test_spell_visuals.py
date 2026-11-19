@@ -41,7 +41,7 @@ class SpellVisualTests(unittest.TestCase):
         self.assertIn("func _build_mesh() -> Mesh:", text)
         self.assertIn("return SpellVisuals.body_mesh(visual)", text)
         visuals = VISUALS.read_text(encoding="utf-8")
-        for fn in ("_flame_spindle(", "_air_stream(", "_droplet(", "_rock("):
+        for fn in ("_flame_spindle(", "_wind_ribbons(", "_droplet(", "_rock("):
             self.assertIn("static func %s" % fn, visuals)
         self.assertIn("const KIND_FIRE := 0", visuals)
         self.assertIn("const KIND_EARTH := 3", visuals)
@@ -255,25 +255,39 @@ class SpellVisualTests(unittest.TestCase):
         text = PROJECTILE.read_text(encoding="utf-8")
         self.assertIn("_light.shadow_enabled = true", text)
 
-    def test_wind_is_refraction_not_particles(self):
-        """Ветер — это искажение фона, а не облако частиц."""
+    def test_wind_matches_reference_layers(self):
+        """Ветер как на референсе Romain Coste: слои, а не одна труба.
+
+        Там читается: мягкие закрученные ленты, яркий полумесяц-наконечник,
+        тонкие штрихи скорости и мусор в вихре.
+        """
         visuals = VISUALS.read_text(encoding="utf-8")
+        for fn in ("_wind_ribbons(", "_wind_crescent("):
+            self.assertIn("static func %s" % fn, visuals)
+        # Ленты идут по спирали: угол растёт вдоль оси.
+        ribbons = visuals.split("static func _wind_ribbons()", 1)[1] \
+            .split("static func _wind_crescent()", 1)[0]
+        self.assertIn("var twist := 9.0 + float(k) * 1.7", ribbons)
+        self.assertIn("var a := phase + t * twist", ribbons)
         air = visuals.split("static func _air_shader()", 1)[1] \
             .split("static func _liquid_shader()", 1)[0]
+        # Светлая слоистая дымка с мягкой альфой, а не неон.
+        self.assertIn("float density = smoothstep(0.25, 0.85", air)
+        self.assertIn("vec3 plume = tint.rgb * (0.55 + 0.65 * density);", air)
+        # Наконечник ярче остального тела.
+        self.assertIn("plume += tint.rgb * core_boost * 1.6;", air)
+        self.assertIn("uniform float core_boost = 0.0;", air)
+        # Преломление осталось добавкой, а не основой.
         self.assertIn("hint_screen_texture", air)
-        self.assertIn("texture(screen_tex, SCREEN_UV + offset)", air)
-        self.assertIn("vec2 offset = (vec2(turb, fine) - 0.5) * distortion", air)
-        # Плёнка почти невидима: альфа много меньше единицы.
-        self.assertIn("float edge = smoothstep(0.35, 1.0, radius);", air)
-        # Ядро струи полностью прозрачное: заливки нет, есть преломление.
-        self.assertIn("ALPHA = clamp(edge * (0.10 + 0.22 * turb)", air)
-        # У воздуха нет собственного свечения.
-        self.assertNotIn("EMISSION = col", air)
+        self.assertIn("uniform float distortion = 0.02;", air)
+
         text = PROJECTILE.read_text(encoding="utf-8")
-        trail = text.split('"wind":\n\t\t\t#', 1)
-        self.assertTrue(trail, "след ветра должен быть описан с комментарием")
-        # Частиц ветра мало: образ держит тело, а не они.
-        self.assertIn("particles.amount = 7", text)
+        self.assertIn("func _build_wind_extras() -> void:", text)
+        self.assertIn('crescent.name = "WindCrescent"', text)
+        self.assertIn('streaks.name = "WindStreaks"', text)
+        self.assertIn('c_mat.set_shader_parameter("core_boost", 1.0)', text)
+        # Штрихи скорости летят назад от наконечника.
+        self.assertIn("sp.direction = Vector3(0.0, 0.0, -1.0)", text)
 
     def test_water_is_transparent_liquid(self):
         """Вода: преломление, fresnel и поглощение по толщине, не заливка."""
