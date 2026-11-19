@@ -76,9 +76,8 @@ var air_jumps_used: int = 0
 
 @onready var collision_shape: CollisionShape3D = $CollisionShape3D
 @onready var head: Node3D = $Head
-@onready var camera: Camera3D = $Head/CameraBoom/Camera3D
-@onready var interact_ray: RayCast3D = $Head/CameraBoom/Camera3D/InteractRay
-@onready var camera_boom: SpringArm3D = $Head/CameraBoom
+@onready var camera: Camera3D = $Head/Camera3D
+@onready var interact_ray: RayCast3D = $Head/Camera3D/InteractRay
 @onready var ceiling_check: ShapeCast3D = $CeilingCheck
 @onready var footstep_audio: AudioStreamPlayer3D = $FootstepAudio
 
@@ -106,6 +105,11 @@ var land_offset: float = 0.0
 var step_offset: float = 0.0
 var land_vel: float = 0.0
 var land_pitch: float = 0.0
+## Кратковременный пинок FOV при колдовстве (отдача), затухает сам.
+var cast_fov_kick: float = 0.0
+## Импульс отдачи камеры при колдовстве: тянет прицел вниз-назад и отпускает.
+var cast_kick_pitch: float = 0.0
+var cast_kick_roll: float = 0.0
 var bob_y: float = 0.0
 var fall_speed: float = 0.0
 var _interact_target: Object = null
@@ -120,9 +124,21 @@ var current_speed_limit: float = 4.5
 @export var sprint_lean_deg: float = 1.5
 @export var sprint_blend_speed: float = 3.0
 @export var speed_ramp: float = 8.0
+
+@export_group("Атмосфера")
+## Тёплый свет у головы: мягко подсвечивает интерьер, без теней.
+@export var warm_light_enabled: bool = true
+@export var warm_light_color: Color = Color(1.0, 0.78, 0.55)
+@export var warm_light_energy: float = 0.55
+@export var warm_light_range: float = 7.0
+## Медленно дрейфующие пылинки вокруг камеры.
+@export var dust_enabled: bool = true
+@export_range(8, 200, 1) var dust_amount: int = 72
 var footstep_timer: float = 0.0
 var step_streams: Dictionary = {}
 var land_stream: AudioStreamWAV = null
+var _warm_light: OmniLight3D = null
+var _vfx_time: float = 0.0
 
 func _ready() -> void:
 
@@ -143,16 +159,11 @@ func _ready() -> void:
 		collision_shape.shape = collision_shape.shape.duplicate()
 		capsule = collision_shape.shape as CapsuleShape3D
 	
-	if camera_boom:
-		camera_boom.spring_length = 0.6
-	
 	if ceiling_check:
 		ceiling_check.add_exception(self)
 		ceiling_check.enabled = true
 
-	# Камера и луч не должны сталкиваться с телом самого игрока
-	if camera_boom:
-		camera_boom.add_excluded_object(get_rid())
+	# Луч взаимодействия не должен задевать тело самого игрока
 	if interact_ray:
 		interact_ray.add_exception(self)
 		interact_ray.collision_mask = 4 # Layer 3: interactable
@@ -173,6 +184,8 @@ func _ready() -> void:
 		land_stream = _generate_footstep_wav(90.0, 0.22, 18.0, 0.5, 0.85)
 		footstep_audio.stream = step_streams[Stance.STANDING]
 
+	_setup_ambient_vfx()
+
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -181,6 +194,81 @@ func _unhandled_input(event: InputEvent) -> void:
 		rotate_y(-event.relative.x * mouse_sensitivity)
 		head.rotate_x(-event.relative.y * mouse_sensitivity)
 		head.rotation.x = clampf(head.rotation.x, deg_to_rad(-89.0), deg_to_rad(89.0))
+
+func _process(delta: float) -> void:
+	# Мерцание очень слабое: свет должен «дышать», а не мигать как лампочка.
+	_vfx_time += delta
+	if _warm_light != null:
+		var flicker := (1.0 + 0.035 * sin(_vfx_time * 6.7)
+			+ 0.02 * sin(_vfx_time * 13.3 + 1.7))
+		_warm_light.light_energy = warm_light_energy * flicker
+
+
+func _setup_ambient_vfx() -> void:
+	if warm_light_enabled:
+		var light := OmniLight3D.new()
+		light.name = "WarmLight"
+		light.light_color = warm_light_color
+		light.light_energy = warm_light_energy
+		light.omni_range = warm_light_range
+		light.omni_attenuation = 1.6
+		light.shadow_enabled = false
+		head.add_child(light)
+		_warm_light = light
+
+	if not dust_enabled or camera == null:
+		return
+
+	var particles := GPUParticles3D.new()
+	particles.name = "DustMotes"
+	particles.amount = dust_amount
+	particles.lifetime = 12.0
+	particles.preprocess = 8.0
+	particles.local_coords = false
+	particles.visibility_aabb = AABB(Vector3(-10.0, -10.0, -10.0), Vector3(20.0, 20.0, 20.0))
+
+	var process := ParticleProcessMaterial.new()
+	process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	process.emission_box_extents = Vector3(5.0, 3.0, 5.0)
+	process.direction = Vector3(0.0, 0.2, 0.0)
+	process.spread = 180.0
+	process.initial_velocity_min = 0.015
+	process.initial_velocity_max = 0.055
+	process.gravity = Vector3(0.0, 0.008, 0.0)
+	process.turbulence_enabled = true
+	process.turbulence_noise_strength = 0.18
+	process.turbulence_noise_scale = 0.9
+	process.turbulence_noise_speed = Vector3(0.12, 0.12, 0.12)
+	process.scale_min = 0.5
+	process.scale_max = 1.3
+	process.color = Color(1.0, 0.94, 0.82, 0.28)
+	particles.process_material = process
+
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.022, 0.022)
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	material.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	material.vertex_color_use_as_albedo = true
+	material.albedo_texture = _dust_dot_texture()
+	quad.material = material
+	particles.draw_pass_1 = quad
+	camera.add_child(particles)
+
+
+func _dust_dot_texture() -> ImageTexture:
+	var size := 64
+	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
+	var center := Vector2(float(size - 1) * 0.5, float(size - 1) * 0.5)
+	for y in size:
+		for x in size:
+			var d := Vector2(float(x), float(y)).distance_to(center) / center.x
+			var a := clampf(1.0 - d, 0.0, 1.0)
+			img.set_pixel(x, y, Color(1.0, 1.0, 1.0, a * a))
+	return ImageTexture.create_from_image(img)
+
 
 func _physics_process(delta: float) -> void:
 	if is_dead:
@@ -415,8 +503,10 @@ func _process_interaction() -> void:
 		target.call("interact")
 
 func _apply_head_bob(delta: float) -> void:
-	# SpringArm3D сам задаёт позицию камеры, поэтому покачиваем сам CameraBoom
-	var bob_node: Node3D = camera_boom
+	# От первого лица камера стоит прямо в глазах, поэтому покачиваем её саму.
+	var bob_node: Node3D = camera
+	if bob_node == null:
+		return
 	if not bob_enabled:
 		bob_node.position = Vector3.ZERO
 		return
@@ -475,20 +565,33 @@ func _apply_camera_feel(delta: float) -> void:
 	# Наклон камеры при движении вбок (strafe tilt)
 	var local_vel := global_transform.basis.inverse() * velocity
 	var target_roll := -local_vel.x / sprint_speed * deg_to_rad(tilt_max_deg)
-	camera.rotation.z = lerpf(camera.rotation.z, target_roll, delta * 8.0)
+	camera.rotation.z = lerpf(camera.rotation.z, target_roll + cast_kick_roll, delta * 8.0)
 
 	# Лёгкий наклон головы вверх при прыжке/падении
 	# + наклон вперёд при беге + толчок при приземлении
-	var target_pitch := clampf(velocity.y * 0.004, -0.04, 0.04) - sprint_blend * deg_to_rad(sprint_lean_deg) + land_pitch
+	var target_pitch := clampf(velocity.y * 0.004, -0.04, 0.04) - sprint_blend * deg_to_rad(sprint_lean_deg) + land_pitch + cast_kick_pitch
 	camera.rotation.x = lerpf(camera.rotation.x, target_pitch, delta * 10.0)
 
+## Короткая отдача при колдовстве: пинок FOV, подброс камеры и лёгкий крен.
+## Слишком слабая отдача читается как «камера стоит на рельсах» — магия
+## кажется наклейкой. 5° FOV и 4° подброса хватает, чтобы тело отозвалось.
+func apply_cast_recoil(fov_kick: float = 5.0, pitch_kick: float = 0.04) -> void:
+	cast_fov_kick = maxf(cast_fov_kick, fov_kick)
+	land_pitch = clampf(land_pitch + pitch_kick, -0.12, 0.12)
+	cast_kick_pitch = clampf(cast_kick_pitch + pitch_kick * 1.4, -0.15, 0.15)
+	cast_kick_roll = clampf(cast_kick_roll + 0.02, -0.06, 0.06)
+
 func _apply_fov_change(delta: float) -> void:
+	# Отдача гасится всегда, даже если динамический FOV выключен.
+	cast_kick_pitch = lerpf(cast_kick_pitch, 0.0, delta * 9.0)
+	cast_kick_roll = lerpf(cast_kick_roll, 0.0, delta * 9.0)
 	if not fov_change:
 		return
 
 	# FOV следует за плавным sprint_blend, а не за переключением состояния
-	var target_fov: float = default_fov + sprint_fov_boost * smoothstep(0.0, 1.0, sprint_blend)
+	var target_fov: float = default_fov + sprint_fov_boost * smoothstep(0.0, 1.0, sprint_blend) + cast_fov_kick
 	camera.fov = lerpf(camera.fov, target_fov, delta * fov_transition_speed)
+	cast_fov_kick = lerpf(cast_fov_kick, 0.0, delta * 12.0)
 
 func _handle_footsteps(delta: float) -> void:
 	if not footstep_audio or not is_on_floor():

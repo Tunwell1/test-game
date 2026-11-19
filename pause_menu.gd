@@ -1,10 +1,14 @@
 extends CanvasLayer
 
-## Меню паузы в том же арканном языке, что и HUD: чернильный затемняющий
-## слой, вращающееся кольцо, серифный заголовок, пункты-строки с золотой
-## чертой при наведении.
+## Меню паузы по присланному референсу: полупрозрачная тёмная панель по
+## центру, двойная волосяная золотая рамка со срезанными углами, небольшой
+## знак над панелью и серифные пункты с тонким подчёркиванием. Фон остаётся
+## видимым, без тяжёлой заливки и арканного кольца.
 
-const MARGIN := 110.0
+const PANEL_W := 420.0
+const PANEL_H := 420.0
+const SETTINGS_W := 500.0
+const SETTINGS_H := 560.0
 const SETTINGS_PATH := "user://settings.cfg"
 const RESOLUTIONS := [Vector2i(1280, 720), Vector2i(1600, 900), Vector2i(1920, 1080)]
 const UI_SCALE_VALUES := [0.8, 1.0, 1.25]
@@ -208,28 +212,20 @@ func _build() -> void:
 	add_child(root)
 
 	main_group = _make_group()
-	main_group.set_anchors_preset(Control.PRESET_CENTER_LEFT)
-	main_group.offset_left = MARGIN
-	main_group.offset_right = MARGIN + 380.0
-	main_group.offset_top = -230.0
-	main_group.offset_bottom = 230.0
+	main_group.set_anchors_preset(Control.PRESET_CENTER)
+	main_group.offset_left = -PANEL_W * 0.5 + 44.0
+	main_group.offset_right = PANEL_W * 0.5 - 44.0
+	main_group.offset_top = -PANEL_H * 0.5 + 58.0
+	main_group.offset_bottom = PANEL_H * 0.5 - 40.0
 	root.add_child(main_group)
 
-	main_group.add_child(_label("ПЕРЕДЫШКА   ·   I", 9, UiTheme.fade(UiTheme.GOLD, 0.9), true))
-	var title := _serif_label("Пауза", 46, UiTheme.PARCHMENT)
-	main_group.add_child(title)
-	main_group.add_child(_rule(UiTheme.fade(UiTheme.GOLD, 0.55), 250.0))
-	main_group.add_child(_spacer(4))
+	main_group.add_child(_title_label("ПАУЗА", 38, UiTheme.PARCHMENT))
+	main_group.add_child(_spacer(20))
 
-	_add_action("Продолжить", "ESC", func(): _set_paused(false), true)
-	_add_action("Настройки", "II", _toggle_settings)
-	_add_action("Начать заново", "III", _restart)
-	_add_action("Выйти из игры", "IV", func(): get_tree().quit())
-
-	main_group.add_child(_spacer(10))
-	main_group.add_child(_rule(Color(1, 1, 1, 0.10), 250.0))
-	main_group.add_child(_label("МИР ПОДОЖДЁТ. ТВОЯ ИСТОРИЯ — НЕТ.", 8,
-		UiTheme.fade(UiTheme.MUTED, 0.85), true))
+	_add_action("Продолжить", "", func(): _set_paused(false), true)
+	_add_action("Настройки", "", _toggle_settings)
+	_add_action("Начать заново", "", _restart)
+	_add_action("Выйти из игры", "", func(): get_tree().quit())
 
 	_build_settings()
 
@@ -237,7 +233,7 @@ func _build() -> void:
 
 func _make_group() -> VBoxContainer:
 	var group := VBoxContainer.new()
-	group.add_theme_constant_override("separation", 14)
+	group.add_theme_constant_override("separation", 8)
 	group.mouse_filter = Control.MOUSE_FILTER_PASS
 	return group
 
@@ -248,6 +244,16 @@ func _serif_label(caption: String, size: int, tint: Color) -> Label:
 	l.add_theme_font_size_override("font_size", size)
 	l.add_theme_color_override("font_color", tint)
 	l.add_theme_constant_override("outline_size", 0)
+	return l
+
+func _title_label(caption: String, size: int, tint: Color) -> Label:
+	var l := Label.new()
+	l.text = caption
+	l.add_theme_font_override("font", UiTheme.tracked(UiTheme.serif(), 3))
+	l.add_theme_font_size_override("font_size", size)
+	l.add_theme_color_override("font_color", tint)
+	l.add_theme_constant_override("outline_size", 0)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	return l
 
 func _label(caption: String, size: int, tint: Color, tracked := false) -> Label:
@@ -279,73 +285,63 @@ func _spacer(h: float) -> Control:
 	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return c
 
-func _add_action(caption: String, key: String, callback: Callable, primary := false) -> void:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 10)
-	row.mouse_filter = Control.MOUSE_FILTER_PASS
-	main_group.add_child(row)
-
+func _add_action(caption: String, _key: String, callback: Callable, primary := false) -> void:
 	var button := Button.new()
 	button.text = caption
-	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	button.custom_minimum_size = Vector2(300, 40 if primary else 36)
-	button.add_theme_font_override("font", UiTheme.serif() if primary else UiTheme.sans())
-	button.add_theme_font_size_override("font_size", 22 if primary else 17)
+	button.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	button.custom_minimum_size = Vector2(300, 42)
+	button.add_theme_font_override("font", UiTheme.serif())
+	button.add_theme_font_size_override("font_size", 22)
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
-	var empty := StyleBoxFlat.new()
-	empty.bg_color = Color(0, 0, 0, 0)
-	empty.content_margin_left = 18.0
-	empty.content_margin_right = 6.0
-	empty.content_margin_top = 5.0
-	empty.content_margin_bottom = 5.0
-
-	var hover := StyleBoxFlat.new()
-	hover.bg_color = Color(0.96, 0.78, 0.49, 0.07)
-	hover.border_color = UiTheme.GOLD
-	hover.border_width_left = 2
-	hover.content_margin_left = 20.0
-	hover.content_margin_right = 6.0
-	hover.content_margin_top = 5.0
-	hover.content_margin_bottom = 5.0
-
-	button.add_theme_stylebox_override("normal", empty)
-	button.add_theme_stylebox_override("hover", hover)
-	button.add_theme_stylebox_override("pressed", hover)
-	button.add_theme_stylebox_override("focus", empty)
-	button.add_theme_color_override("font_color", UiTheme.PARCHMENT if primary
-		else Color(0.80, 0.81, 0.84))
+	var plain := StyleBoxFlat.new()
+	plain.bg_color = Color(0, 0, 0, 0)
+	plain.content_margin_top = 8.0
+	plain.content_margin_bottom = 8.0
+	button.add_theme_stylebox_override("normal", plain)
+	button.add_theme_stylebox_override("hover", plain)
+	button.add_theme_stylebox_override("pressed", plain)
+	button.add_theme_stylebox_override("focus", plain)
+	button.add_theme_color_override("font_color", UiTheme.PARCHMENT.lerp(UiTheme.MUTED, 0.25))
 	button.add_theme_color_override("font_hover_color", UiTheme.GOLD)
 	button.add_theme_color_override("font_pressed_color", UiTheme.GOLD)
 	button.pressed.connect(callback)
-	row.add_child(button)
+	button.draw.connect(_draw_menu_button.bind(button, caption, UiTheme.serif(), 22, primary))
+	main_group.add_child(button)
 
-	var hint := _label(key, 8, UiTheme.fade(UiTheme.MUTED, 0.75), true)
-	hint.custom_minimum_size = Vector2(40, 0)
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(hint)
+func _draw_menu_button(button: Button, caption: String, font: Font, size: int, primary: bool) -> void:
+	var w := UiTheme.text_width(font, caption, size)
+	var cx := button.size.x * 0.5
+	var y := button.size.y - 5.0
+	var hovered := button.get_rect().has_point(button.get_local_mouse_position())
+	var underline := UiTheme.fade(UiTheme.GOLD,
+		0.75 if primary else (0.85 if hovered else 0.38))
+	button.draw_line(Vector2(cx - w * 0.5, y), Vector2(cx + w * 0.5, y), underline, 1.0, true)
+	if primary or hovered:
+		var ax := cx - w * 0.5 - 16.0
+		var ay := button.size.y * 0.5
+		var pts := PackedVector2Array([
+			Vector2(ax, ay - 5.0), Vector2(ax + 7.0, ay), Vector2(ax, ay + 5.0)])
+		button.draw_colored_polygon(pts, UiTheme.fade(UiTheme.GOLD, 0.9))
 
 func _build_settings() -> void:
 	settings_scroll = ScrollContainer.new()
-	settings_scroll.set_anchors_preset(Control.PRESET_CENTER_LEFT)
-	settings_scroll.offset_left = MARGIN
-	settings_scroll.offset_right = MARGIN + 440.0
-	settings_scroll.offset_top = -190.0
-	settings_scroll.offset_bottom = 190.0
+	settings_scroll.set_anchors_preset(Control.PRESET_CENTER)
+	settings_scroll.offset_left = -SETTINGS_W * 0.5 + 30.0
+	settings_scroll.offset_right = SETTINGS_W * 0.5 - 30.0
+	settings_scroll.offset_top = -SETTINGS_H * 0.5 + 56.0
+	settings_scroll.offset_bottom = SETTINGS_H * 0.5 - 34.0
 	settings_scroll.visible = false
 	settings_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	root.add_child(settings_scroll)
 
 	settings_group = _make_group()
-	settings_group.custom_minimum_size = Vector2(420.0, 780.0)
+	settings_group.custom_minimum_size = Vector2(SETTINGS_W - 60.0, 780.0)
 	settings_group.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	settings_scroll.add_child(settings_group)
 
-	settings_group.add_child(_label("ПЕРЕДЫШКА   ·   II", 9, UiTheme.fade(UiTheme.GOLD, 0.9), true))
-	settings_group.add_child(_serif_label("Настройки", 38, UiTheme.PARCHMENT))
-	settings_group.add_child(_rule(UiTheme.fade(UiTheme.GOLD, 0.55), 320.0))
-	settings_group.add_child(_spacer(8))
+	settings_group.add_child(_title_label("НАСТРОЙКИ", 30, UiTheme.PARCHMENT))
+	settings_group.add_child(_spacer(18))
 
 	var vol_row := HBoxContainer.new()
 	vol_row.add_theme_constant_override("separation", 12)
@@ -441,29 +437,22 @@ func _build_settings() -> void:
 
 	var back := Button.new()
 	back.text = "Назад"
-	back.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	back.alignment = HORIZONTAL_ALIGNMENT_CENTER
 	back.add_theme_font_override("font", UiTheme.serif())
-	back.add_theme_font_size_override("font_size", 19)
-	back.custom_minimum_size = Vector2(200, 36)
+	back.add_theme_font_size_override("font_size", 22)
+	back.custom_minimum_size = Vector2(200, 42)
 	var plain := StyleBoxFlat.new()
 	plain.bg_color = Color(0, 0, 0, 0)
-	plain.content_margin_left = 18.0
-	plain.content_margin_top = 5.0
-	plain.content_margin_bottom = 5.0
-	var hover := StyleBoxFlat.new()
-	hover.bg_color = Color(0.96, 0.78, 0.49, 0.07)
-	hover.border_color = UiTheme.GOLD
-	hover.border_width_left = 2
-	hover.content_margin_left = 20.0
-	hover.content_margin_top = 5.0
-	hover.content_margin_bottom = 5.0
+	plain.content_margin_top = 8.0
+	plain.content_margin_bottom = 8.0
 	back.add_theme_stylebox_override("normal", plain)
-	back.add_theme_stylebox_override("hover", hover)
-	back.add_theme_stylebox_override("pressed", hover)
+	back.add_theme_stylebox_override("hover", plain)
+	back.add_theme_stylebox_override("pressed", plain)
 	back.add_theme_stylebox_override("focus", plain)
-	back.add_theme_color_override("font_color", UiTheme.PARCHMENT)
+	back.add_theme_color_override("font_color", UiTheme.PARCHMENT.lerp(UiTheme.MUTED, 0.25))
 	back.add_theme_color_override("font_hover_color", UiTheme.GOLD)
 	back.pressed.connect(_toggle_settings)
+	back.draw.connect(_draw_menu_button.bind(back, "Назад", UiTheme.serif(), 22, false))
 	settings_group.add_child(back)
 
 func _build_binding_rows() -> void:
@@ -573,6 +562,12 @@ func _new_slider(minimum: float, maximum: float, initial: float) -> HSlider:
 
 # --- Отрисовка фона --------------------------------------------------------
 
+func _panel_rect() -> Rect2:
+	var s := root.size
+	var w := SETTINGS_W if settings_open else PANEL_W
+	var h := SETTINGS_H if settings_open else PANEL_H
+	return Rect2(Vector2((s.x - w) * 0.5, (s.y - h) * 0.5), Vector2(w, h))
+
 func _draw_backdrop() -> void:
 	if root == null:
 		return
@@ -584,26 +579,15 @@ func _draw_backdrop() -> void:
 		return
 
 	if _scrim == null:
-		_scrim = UiTheme.vertical_gradient(Color(0.020, 0.026, 0.036, 0.94),
-			Color(0.010, 0.013, 0.020, 0.97))
+		_scrim = UiTheme.vertical_gradient(Color(0.020, 0.028, 0.040, 0.42),
+			Color(0.010, 0.016, 0.026, 0.50))
 	root.draw_texture_rect(_scrim, Rect2(Vector2.ZERO, s), false, Color(1, 1, 1, a))
 
-	# Крупное кольцо за текстом: атмосфера, а не рамка.
-	var center := Vector2(s.x * 0.5, s.y * 0.52)
-	UiTheme.draw_arcane_ring(root, center, minf(s.y, s.x) * 0.44, UiTheme.fade(UiTheme.GOLD, 0.55 * a),
-		_time * 0.05, 72)
-
-	# Вертикальная золотая нить, задающая левую ось композиции.
-	root.draw_rect(Rect2(Vector2(MARGIN - 34.0, s.y * 0.16), Vector2(1, s.y * 0.68)),
-		UiTheme.fade(UiTheme.GOLD, 0.34 * a), true)
-	UiTheme.draw_diamond(root, Vector2(MARGIN - 33.5, s.y * 0.16), 3.0, 3.0,
-		UiTheme.fade(UiTheme.GOLD, 0.7 * a))
-	UiTheme.draw_diamond(root, Vector2(MARGIN - 33.5, s.y * 0.84), 3.0, 3.0,
-		UiTheme.fade(UiTheme.GOLD, 0.7 * a))
-
-	# Тонкая разделительная линия справа — «водяной знак» макета.
-	root.draw_rect(Rect2(Vector2(s.x * 0.62, 0), Vector2(1, s.y)),
-		Color(1, 1, 1, 0.030 * a), true)
+	var panel := _panel_rect()
+	UiTheme.draw_reference_panel(root, panel, UiTheme.GOLD, a)
+	UiTheme.draw_crest(root, Vector2(panel.position.x + panel.size.x * 0.5,
+		panel.position.y - 20.0), UiTheme.GOLD, a)
+	UiTheme.draw_sparkles(root, panel, _time, UiTheme.GOLD, a)
 
 func _process(delta: float) -> void:
 	_time += delta

@@ -12,20 +12,20 @@ extends RefCounted
 
 const INK := Color(0.035, 0.040, 0.052)
 const INK_SOFT := Color(0.070, 0.077, 0.094)
-const PARCHMENT := Color(0.941, 0.925, 0.882)
+const PARCHMENT := Color(0.914, 0.898, 0.855)
 const TEXT := PARCHMENT
-const MUTED := Color(0.596, 0.604, 0.643)
-const GOLD := Color(0.929, 0.776, 0.490)
+const MUTED := Color(0.557, 0.580, 0.635)
+const GOLD := Color(0.824, 0.667, 0.388)
 const GOLD_DEEP := Color(0.541, 0.435, 0.259)
 const ACCENT := GOLD
-const BLOOD := Color(0.788, 0.243, 0.267)
+const BLOOD := Color(0.847, 0.357, 0.357)
 const HEALTH := BLOOD
-const MANA := Color(0.361, 0.580, 0.980)
-const STAMINA := Color(0.882, 0.812, 0.490)
+const MANA := Color(0.373, 0.549, 0.878)
+const STAMINA := Color(0.718, 0.741, 0.420)
 
 const BG := Color(0.035, 0.040, 0.052, 0.82)
 const BG_SOLID := Color(0.062, 0.069, 0.084, 0.97)
-const BORDER := Color(1, 1, 1, 0.075)
+const BORDER := Color(GOLD.r, GOLD.g, GOLD.b, 0.30)
 
 const SCHOOL_COLORS := {
 	MagicBook.School.FIRE: Color(1.0, 0.482, 0.196),
@@ -296,6 +296,74 @@ static func _radial(g: Gradient) -> GradientTexture2D:
 	t.fill_to = Vector2(1.0, 0.5)
 	return t
 
+static var _panel_gradient: GradientTexture2D = null
+
+## Градиент для полупрозрачной панели-референса. Кэшируется, чтобы редкие
+## перерисовки меню не создавали новую текстуру каждый кадр.
+static func panel_gradient() -> GradientTexture2D:
+	if _panel_gradient == null:
+		_panel_gradient = vertical_gradient(
+			Color(0.105, 0.138, 0.176, 0.82), Color(0.020, 0.036, 0.058, 0.90))
+	return _panel_gradient
+
+## Панель по присланному референсу: двойная волосяная рамка, срезанные углы
+## и короткие перекрестия по середине сторон.
+static func draw_reference_panel(ci: CanvasItem, rect: Rect2, tint: Color,
+		a: float = 1.0, inset: float = 12.0) -> void:
+	ci.draw_texture_rect(panel_gradient(), rect, false, Color(1, 1, 1, a))
+	ci.draw_rect(rect, fade(tint, 0.52 * a), false, 1.0, true)
+	var inner := rect.grow(-inset)
+	ci.draw_rect(inner, fade(tint, 0.26 * a), false, 1.0, true)
+
+	var outer_corners := [rect.position, Vector2(rect.end.x, rect.position.y), rect.end,
+		Vector2(rect.position.x, rect.end.y)]
+	var inner_corners := [inner.position, Vector2(inner.end.x, inner.position.y), inner.end,
+		Vector2(inner.position.x, inner.end.y)]
+	var dirs := [Vector2(1.0, 1.0), Vector2(-1.0, 1.0), Vector2(-1.0, -1.0), Vector2(1.0, -1.0)]
+	for i in 4:
+		var c: Vector2 = outer_corners[i]
+		var ic: Vector2 = inner_corners[i]
+		var d: Vector2 = dirs[i]
+		ci.draw_line(c + d * 5.0, ic - d * 5.0, fade(tint, 0.70 * a), 1.0, true)
+
+	var mid := rect.position + rect.size * 0.5
+	ci.draw_line(Vector2(rect.position.x - 6.0, mid.y), Vector2(rect.position.x + 6.0, mid.y),
+		fade(tint, 0.55 * a), 1.0, true)
+	ci.draw_line(Vector2(rect.end.x - 6.0, mid.y), Vector2(rect.end.x + 6.0, mid.y),
+		fade(tint, 0.55 * a), 1.0, true)
+	ci.draw_line(Vector2(mid.x, rect.position.y - 6.0), Vector2(mid.x, rect.position.y + 6.0),
+		fade(tint, 0.35 * a), 1.0, true)
+	ci.draw_line(Vector2(mid.x, rect.end.y - 6.0), Vector2(mid.x, rect.end.y + 6.0),
+		fade(tint, 0.35 * a), 1.0, true)
+
+## Небольшой знак над верхней кромкой панели.
+static func draw_crest(ci: CanvasItem, center: Vector2, tint: Color, a: float = 1.0) -> void:
+	var gold := fade(tint, 0.92 * a)
+	var r := 14.0
+	for i in 3:
+		var ang := -PI * 0.5 + TAU * float(i) / 3.0
+		var d := Vector2(cos(ang), sin(ang))
+		var c := center + d * r * 0.42
+		ci.draw_arc(c, r * 0.58, ang - 1.05, ang + 1.05, 20, gold, 1.3, true)
+	draw_diamond(ci, center, 3.0, 5.0, gold)
+
+## Редкие мерцающие точки вокруг панели. Позиции фиксированы, чтобы не «дёргалось».
+static func draw_sparkles(ci: CanvasItem, rect: Rect2, time: float, tint: Color,
+		a: float = 1.0) -> void:
+	var offsets := [
+		Vector2(-0.56, -0.56), Vector2(-0.34, -0.66), Vector2(0.30, -0.62),
+		Vector2(0.56, -0.48), Vector2(-0.62, -0.18), Vector2(0.62, -0.10),
+		Vector2(-0.58, 0.28), Vector2(0.60, 0.34), Vector2(-0.42, 0.60),
+		Vector2(0.38, 0.62), Vector2(0.06, -0.72), Vector2(-0.10, 0.68),
+	]
+	var center := rect.position + rect.size * 0.5
+	for i in offsets.size():
+		var p: Vector2 = offsets[i]
+		var pos := center + Vector2(p.x * rect.size.x, p.y * rect.size.y)
+		var twinkle := 0.5 + 0.5 * sin(time * 1.7 + float(i) * 1.9)
+		ci.draw_circle(pos, 1.0 + 0.8 * twinkle,
+			fade(tint, (0.20 + 0.45 * twinkle) * a))
+
 ## Ромбовидный «бегунок» слайдера, сгенерированный попиксельно.
 static func diamond_texture(size: int, tint: Color) -> ImageTexture:
 	var img := Image.create_empty(size, size, false, Image.FORMAT_RGBA8)
@@ -334,19 +402,19 @@ static func build_theme() -> Theme:
 	t.set_color("font_color", "Label", TEXT)
 	t.set_constant("outline_size", "Label", 0)
 
-	var normal := box(Color(0.11, 0.122, 0.152, 0.94), BORDER, 6, 1, 18, 11)
-	var hover := box(Color(0.16, 0.175, 0.215, 0.96), fade(GOLD, 0.55), 6, 1, 18, 11)
-	var pressed := box(Color(0.09, 0.10, 0.125, 1.0), GOLD, 6, 1, 18, 11)
+	var normal := box(Color(0.055, 0.062, 0.078, 0.94), BORDER, 0, 1, 18, 11)
+	var hover := box(Color(0.085, 0.095, 0.115, 0.96), fade(GOLD, 0.55), 0, 1, 18, 11)
+	var pressed := box(Color(0.045, 0.052, 0.066, 1.0), fade(GOLD, 0.85), 0, 1, 18, 11)
 	t.set_stylebox("normal", "Button", normal)
 	t.set_stylebox("hover", "Button", hover)
 	t.set_stylebox("pressed", "Button", pressed)
-	t.set_stylebox("focus", "Button", box(Color(0, 0, 0, 0), fade(GOLD, 0.45), 6, 1, 18, 11))
+	t.set_stylebox("focus", "Button", box(Color(0, 0, 0, 0), fade(GOLD, 0.50), 0, 1, 18, 11))
 	t.set_color("font_color", "Button", TEXT)
 	t.set_color("font_hover_color", "Button", PARCHMENT)
 	t.set_color("font_pressed_color", "Button", GOLD)
 	t.set_font_size("font_size", "Button", 16)
 
-	t.set_stylebox("panel", "PanelContainer", box(BG_SOLID, BORDER, 4, 1, 26, 22))
+	t.set_stylebox("panel", "PanelContainer", box(BG_SOLID, BORDER, 0, 1, 26, 22))
 
 	# Слайдер: тонкая дорожка, золотая заливка, ромбовидный бегунок.
 	var track := StyleBoxFlat.new()
