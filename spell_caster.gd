@@ -144,10 +144,10 @@ func cast(id: String) -> bool:
 	magic_noise = maxf(magic_noise, data["noise"])
 
 	var cam := player.camera
-	_spawn_cast_fx(cam, data["color"])
+	_spawn_cast_fx(cam, data["color"], str(data.get("visual", "fire")))
 	SpellAudio.play_at(player, Vector3.ZERO,
 		SpellAudio.cast_stream(str(data.get("visual", ""))), -8.0, "CastAudio")
-	player.apply_cast_recoil(2.5, 0.03)
+	player.apply_cast_recoil(5.0, 0.04)
 	# Снаряд вылетает после короткой антиципации, а не мгновенно.
 	get_tree().create_timer(CAST_WINDUP).timeout.connect(_launch.bind(id))
 	return true
@@ -189,7 +189,7 @@ func _launch(id: String) -> void:
 	spell_cast.emit(id)
 
 ## «Сбор» энергии у камеры: искры сжимаются и гаснут, вспышка света.
-func _spawn_cast_fx(cam: Camera3D, tint: Color) -> void:
+func _spawn_cast_fx(cam: Camera3D, tint: Color, visual_kind: String) -> void:
 	if cam == null:
 		return
 	var parent: Node = get_tree().current_scene
@@ -202,12 +202,26 @@ func _spawn_cast_fx(cam: Camera3D, tint: Color) -> void:
 	parent.add_child(fx)
 	fx.global_position = cast_hand_position(cam)
 
-	var light := OmniLight3D.new()
-	light.light_color = tint
-	light.light_energy = 3.2
-	light.omni_range = 3.2
-	light.omni_attenuation = 1.4
-	fx.add_child(light)
+	# Сбор энергии выглядит по-разному. Светится только огонь: камень
+	# стягивается в руку пылью, вода — каплями, ветер — полосами воздуха.
+	var burns := visual_kind == "fire"
+	var kind := "spark"
+	match visual_kind:
+		"earth":
+			kind = "soft"
+		"water":
+			kind = "droplet"
+		"wind":
+			kind = "streak"
+
+	var light: OmniLight3D = null
+	if burns:
+		light = OmniLight3D.new()
+		light.light_color = tint
+		light.light_energy = 3.2
+		light.omni_range = 3.2
+		light.omni_attenuation = 1.4
+		fx.add_child(light)
 
 	var particles := GPUParticles3D.new()
 	particles.amount = 22
@@ -217,19 +231,10 @@ func _spawn_cast_fx(cam: Camera3D, tint: Color) -> void:
 	particles.visibility_aabb = AABB(Vector3(-1.0, -1.0, -1.0), Vector3(2.0, 2.0, 2.0))
 	var quad := QuadMesh.new()
 	quad.size = Vector2(0.14, 0.14)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_texture = SpellProjectile._particle_texture("shard")
-	# HDR-множитель + аддитивный блендинг: сбор энергии светится, а не
-	# выглядит россыпью серых бумажек.
-	mat.albedo_color = Color(tint.r, tint.g, tint.b, 0.9) * Color(1.7, 1.7, 1.7, 1.0)
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
-	mat.alpha_scissor_threshold = 0.5
-	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.vertex_color_use_as_albedo = true
-	quad.material = mat
+	# Общий генератор материалов: аддитивный HDR — только для искр огня,
+	# остальные школы получают освещённую материю.
+	quad.material = SpellProjectile.particle_material(kind,
+		Color(tint.r, tint.g, tint.b, 0.9))
 	particles.draw_pass_1 = quad
 	var process := ParticleProcessMaterial.new()
 	process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
@@ -244,12 +249,16 @@ func _spawn_cast_fx(cam: Camera3D, tint: Color) -> void:
 	process.color_ramp = SpellProjectile._fade_ramp(0.85)
 	# Частицы сжимаются в точку — читается как «втягивание» энергии.
 	process.scale_curve = SpellProjectile._scale_curve(1.7, 0.05)
+	if kind == "droplet":
+		# Капли стягиваются к руке и гаснут, но падают, а не висят.
+		process.gravity = Vector3(0.0, -1.5, 0.0)
 	particles.process_material = process
 	particles.emitting = true
 	fx.add_child(particles)
 
-	var tween := fx.create_tween()
-	# Свет не просто гаснет: короткий подъём к моменту вылета и резкий спад.
-	tween.tween_property(light, "light_energy", 4.2, CAST_WINDUP * 0.7)
-	tween.tween_property(light, "light_energy", 0.0, CAST_WINDUP * 0.9)
+	if light != null:
+		var tween := fx.create_tween()
+		# Свет не просто гаснет: подъём к моменту вылета и резкий спад.
+		tween.tween_property(light, "light_energy", 4.2, CAST_WINDUP * 0.7)
+		tween.tween_property(light, "light_energy", 0.0, CAST_WINDUP * 0.9)
 	get_tree().create_timer(0.5).timeout.connect(fx.queue_free)

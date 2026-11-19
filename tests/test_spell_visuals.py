@@ -56,8 +56,8 @@ class SpellVisualTests(unittest.TestCase):
         self.assertIn("static var _particle_textures: Dictionary = {}", text)
         for kind in ("spark", "streak", "droplet", "shard"):
             self.assertIn('"%s":' % kind, text)
-        self.assertIn('_particle_material("soft",', text)
-        self.assertIn("albedo_texture = _particle_texture(kind)", text)
+        self.assertIn('particle_material("soft",', text)
+        self.assertIn("mat.albedo_texture = _particle_texture(kind)", text)
         self.assertIn("particles.draw_passes = 1", text)
         self.assertNotIn("particles.draw_pass_2 = core", text)
         self.assertIn("sdf = maxf(absf(d.x)", text)
@@ -99,7 +99,7 @@ class SpellVisualTests(unittest.TestCase):
         self.assertIn("const CAST_WINDUP := 0.2", text)
         self.assertIn("const CAST_HAND_OFFSET := Vector3(", text)
         self.assertIn("func _launch(id: String) -> void:", text)
-        self.assertIn("func _spawn_cast_fx(cam: Camera3D, tint: Color) -> void:", text)
+        self.assertIn("func _spawn_cast_fx(cam: Camera3D, tint: Color, visual_kind: String) -> void:", text)
         # Сбор энергии и вылет снаряда идут из одной точки у «руки», а не из
         # центра объектива.
         self.assertIn("func cast_hand_position(cam: Camera3D) -> Vector3:", text)
@@ -119,11 +119,22 @@ class SpellVisualTests(unittest.TestCase):
         self.assertIn("func apply_cast_recoil(", text)
         self.assertIn("sprint_blend) + cast_fov_kick", text)
 
+    def test_projectile_has_inertia_not_a_laser(self):
+        # Постоянная скорость и прямая линия — главная причина, по которой
+        # снаряд читается как «объект создан в направлении прицела».
+        text = PROJECTILE.read_text(encoding="utf-8")
+        self.assertIn("func _speed_factor() -> float:", text)
+        self.assertIn("* _speed_factor() * delta", text)
+        # Земля летит по дуге, а не по прямой.
+        self.assertIn("-7.5 * _time + 2.2", text)
+        # Снаряд «выстреливается» из руки, а не появляется готовым.
+        self.assertIn("_mesh.scale = Vector3.ONE * 0.35", text)
+
     def test_fire_light_flickers(self):
         text = PROJECTILE.read_text(encoding="utf-8")
         self.assertIn("var _light: OmniLight3D = null", text)
         self.assertIn("_light = OmniLight3D.new()", text)
-        self.assertIn("_light.light_energy = 0.8 + 0.22 * sin(_time * 21.0)", text)
+        self.assertIn("_light.light_energy = 2.4 + 0.35 * sin(_time * 21.0)", text)
 
     def test_impact_leaves_decal(self):
         text = PROJECTILE.read_text(encoding="utf-8")
@@ -174,7 +185,7 @@ class SpellVisualTests(unittest.TestCase):
         text = PROJECTILE.read_text(encoding="utf-8")
         self.assertIn("func _make_smoke() -> GPUParticles3D:", text)
         self.assertIn("particles.name = \"SpellSmoke\"", text)
-        self.assertIn('quad.material = _particle_material("soft", Color(0.16', text)
+        self.assertIn('quad.material = particle_material("soft", Color(0.16', text)
         self.assertIn("process.scale_curve = _scale_curve(0.7, 2.4)", text)
         self.assertIn("process.turbulence_enabled = true", text)
         self.assertIn("process.turbulence_noise_speed = Vector3(0.8, 0.8, 0.8)", text)

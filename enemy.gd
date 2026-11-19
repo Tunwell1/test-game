@@ -324,17 +324,8 @@ func _spawn_burn_vfx() -> void:
 
 	var quad := QuadMesh.new()
 	quad.size = Vector2(0.20, 0.20)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_texture = SpellProjectile._particle_texture("spark")
-	mat.albedo_color = Color(1.0, 0.5, 0.12, 0.95) * Color(1.7, 1.7, 1.7, 1.0)
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
-	mat.alpha_scissor_threshold = 0.5
-	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.vertex_color_use_as_albedo = true
-	quad.material = mat
+	# Искры пламени — тот же аддитивный HDR-материал, что у огненного снаряда.
+	quad.material = SpellProjectile.particle_material("spark", Color(1.0, 0.5, 0.12, 0.95))
 	particles.draw_pass_1 = quad
 
 	var process := ParticleProcessMaterial.new()
@@ -420,17 +411,8 @@ func _spawn_hit_sparks(color: Color, count: int = 14) -> void:
 
 	var quad := QuadMesh.new()
 	quad.size = Vector2(0.16, 0.16)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_texture = SpellProjectile._particle_texture("spark")
-	mat.albedo_color = Color(color.r, color.g, color.b, 0.95) * Color(1.7, 1.7, 1.7, 1.0)
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
-	mat.alpha_scissor_threshold = 0.5
-	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.vertex_color_use_as_albedo = true
-	quad.material = mat
+	# Осколки «материи» при попадании не светятся: тёплые искры — только у огня.
+	quad.material = SpellProjectile.particle_material("shard", color)
 	particles.draw_pass_1 = quad
 
 	var process := ParticleProcessMaterial.new()

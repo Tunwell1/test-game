@@ -34,27 +34,39 @@ class RenderSharpnessTests(unittest.TestCase):
     def test_glow_stays_off_wide_levels_and_bloom(self):
         text = SCENE.read_text(encoding="utf-8")
         self.assertIn("glow_levels/4 = 1.0", text)
-        self.assertIn("glow_levels/5 = 0.6", text)
-        self.assertIn("glow_intensity = 0.35", text)
+        self.assertIn("glow_levels/5 = 0.45", text)
+        self.assertIn("glow_intensity = 0.55", text)
 
-    def test_energy_particles_are_additive_hdr(self):
-        # Энергия (искры, струи, осколки) обязана складываться со светом и
-        # выходить за 1.0 — иначе искры только затемняют фон и узкий glow их
-        # не видит. Порог отсечения работает только с ALPHA_SCISSOR.
+    def test_only_fire_particles_glow(self):
+        # Светится только огонь. Вода, ветер и камень — материя: если они
+        # складываются со светом (BLEND_MODE_ADD), эффект читается как sci-fi.
         text = PROJECTILE.read_text(encoding="utf-8")
-        self.assertIn('const ENERGY_PARTICLES := ["spark", "streak", "droplet", "shard"]', text)
+        self.assertIn('const ENERGY_PARTICLES := ["spark"]', text)
         self.assertIn("mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR", text)
         self.assertIn("mat.alpha_scissor_threshold = 0.5", text)
         self.assertIn("mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD", text)
-        self.assertIn("* Color(1.7, 1.7, 1.7, 1.0)", text)
+        # Ветка аддитивности заканчивается на огне: капли, полосы и осколки
+        # обрабатываются только в ветке освещённой материи.
+        fire_branch = text.split("if ENERGY_PARTICLES.has(kind):", 1)[1].split(
+            "match kind:", 1)[0]
+        self.assertNotIn('"droplet"', fire_branch)
+        self.assertNotIn('"streak"', fire_branch)
+        self.assertNotIn('"shard"', fire_branch)
 
-    def test_matter_particles_stay_soft_and_matte(self):
-        # Дым и пыль должны затемнять фон (обычная альфа) и иметь мягкий
-        # спрайт: жёсткий гексагон на дыме читается как серые многоугольники.
+    def test_matter_particles_are_lit_and_matte(self):
+        # Материя освещается сценой и не имеет эмиссии.
         text = PROJECTILE.read_text(encoding="utf-8")
         self.assertIn("mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX", text)
+        self.assertIn("mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL", text)
         self.assertIn("static func _soft_dot_texture() -> ImageTexture:", text)
         self.assertIn("mat.albedo_texture = _soft_dot_texture()", text)
+
+    def test_only_fire_emits_light(self):
+        # Ни снаряд, ни удар не излучают свет, кроме огня.
+        text = PROJECTILE.read_text(encoding="utf-8")
+        self.assertIn('var emits_light := visual == "fire"', text)
+        self.assertIn('var impact_light := visual == "fire"', text)
+        self.assertIn("if flash != null:", text)
 
     def test_particle_sprites_keep_geometric_silhouettes(self):
         text = PROJECTILE.read_text(encoding="utf-8")
